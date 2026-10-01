@@ -13,7 +13,6 @@ const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipane
 const ONAYLI_SMS_API_KEY = 'osms_24a366588a5adf689da78bd656ef845effba51b53754bf57';
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
 
-// Veritabanı ve Doğru API Kodları (Eski Sorunsuz Sistem Parametreleri)
 let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
@@ -33,7 +32,6 @@ let db = {
     orders: {}
 };
 
-// Ziyaretçi Takibi
 app.use((req, res, next) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (!db.visitors.some(v => v.ip === ip)) {
@@ -42,8 +40,6 @@ app.use((req, res, next) => {
     }
     next();
 });
-
-// --- API ROTALARI ---
 
 app.get('/api/getServices', (req, res) => {
     res.json({ success: true, services: db.services });
@@ -78,13 +74,12 @@ app.post('/api/auth/register', (req, res) => {
     res.json({ success: true, username, role: "user" });
 });
 
-// Ödeme Bildirimi
 app.post('/api/deposit/notify', async (req, res) => {
     const { username, senderName, amount } = req.body;
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
 
     const paymentId = 'pay_' + Date.now();
-    db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR') };
+    db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR') });
 
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -137,7 +132,7 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// --- ONAYLI SMS API ENTEGRASYONU ---
+// --- ONAYLI SMS API ENTEGRASYONU (OTOMATİK STOK YAKALAYICI / RETRY DÖNGÜSÜ) ---
 app.post('/api/buyNumber', async (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
@@ -148,43 +143,51 @@ app.post('/api/buyNumber', async (req, res) => {
         return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
     }
 
-    try {
-        const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`;
-        console.log("API İstek URL:", targetUrl);
+    // Maksimum 15 kez (yaklaşık 30-45 saniye boyunca) arkada saniyede bir stok yoklama döngüsü çalıştırır
+    let attempts = 0;
+    const maxAttempts = 15;
 
-        const apiResponse = await axios.get(targetUrl);
-        let responseText = apiResponse.data;
-        console.log("API Yanıtı:", responseText);
+    while (attempts < maxAttempts) {
+        attempts++;
+        try {
+            const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`;
+            console.log(`[Stok Denemesi ${attempts}/${maxAttempts}] URL:`, targetUrl);
 
-        if (typeof responseText === 'string' && responseText.includes('ACCESS_NUMBER')) {
-            const parts = responseText.split(':');
-            const activationId = parts[1];
-            const phoneNumber = parts[2];
+            const apiResponse = await axios.get(targetUrl);
+            let responseText = apiResponse.data;
+            console.log("API Yanıtı:", responseText);
 
-            userObj.balance -= service.price;
+            if (typeof responseText === 'string' && responseText.includes('ACCESS_NUMBER')) {
+                const parts = responseText.split(':');
+                const activationId = parts[1];
+                const phoneNumber = parts[2];
 
-            const order = {
-                activationId,
-                productName: service.name,
-                phoneNumber,
-                code: "Bekleniyor...",
-                status: 'waiting',
-                username,
-                time: new Date().toLocaleString('tr-TR')
-            };
+                userObj.balance -= service.price;
 
-            db.orders[activationId] = order;
-            return res.json({ success: true, order });
-        } else {
-            return res.json({ success: false, message: "Şu an bu serviste stok bulunamadı (" + responseText + "). Lütfen birazdan tekrar deneyin." });
+                const order = {
+                    activationId,
+                    productName: service.name,
+                    phoneNumber,
+                    code: "Bekleniyor...",
+                    status: 'waiting',
+                    username,
+                    time: new Date().toLocaleString('tr-TR')
+                };
+
+                db.orders[activationId] = order;
+                return res.json({ success: true, order });
+            }
+        } catch (error) {
+            console.error("OnaylıSMS API Bağlantı Hatası:", error.message);
         }
-    } catch (error) {
-        console.error("OnaylıSMS API Hatası:", error.message);
-        return res.json({ success: false, message: "Numara Sağlayıcı API Bağlantı Hatası." });
+
+        // Eğer stok yoksa (NO_NUMBERS vb.), 2 saniye bekleyip tekrar denesin
+        await new Promise(resolve => setTimeout(resolve, 2000));
     }
+
+    return res.json({ success: false, message: "Şu an bu serviste yoğunluk nedeniyle stok bulunamadı. Otomatik denemeler sonuç vermedi, lütfen biraz sonra tekrar deneyin." });
 });
 
-// SMS Kodunu Kontrol Et
 app.get('/api/checkSms/:id', async (req, res) => {
     const activationId = req.params.id;
     const order = db.orders[activationId];
@@ -212,11 +215,9 @@ app.get('/api/checkSms/:id', async (req, res) => {
     }
 });
 
-// --- TELEGRAM BOT WEBHOOK ---
 const webhookPath = `/api/telegram-webhook-${TELEGRAM_BOT_TOKEN}`;
 app.post(webhookPath, async (req, res) => {
     const update = req.body;
-
     if (update.callback_query) {
         const callbackData = update.callback_query.data;
         const chatId = update.callback_query.message.chat.id;
@@ -230,53 +231,33 @@ app.post(webhookPath, async (req, res) => {
                     if (db.users[payment.username]) {
                         db.users[payment.username].balance += payment.amount;
                     }
-                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                        chat_id: chatId,
-                        text: `✅ Ödeme Onaylandı!\nKullanıcı: ${payment.username}\nTutar: ${payment.amount} TL`
-                    });
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: chatId, text: `✅ Ödeme Onaylandı!\nKullanıcı: ${payment.username}\nTutar: ${payment.amount} TL` });
                 } else {
                     payment.status = 'rejected';
-                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                        chat_id: chatId,
-                        text: `❌ Ödeme Reddedildi!\nKullanıcı: ${payment.username}`
-                    });
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: chatId, text: `❌ Ödeme Reddedildi!\nKullanıcı: ${payment.username}` });
                 }
             }
         } else if (callbackData === 'menu_prices') {
             let priceText = "💰 **Güncel Fiyat Listemiz:**\n\n";
-            db.services.forEach(s => {
-                priceText += `• ${s.name}: *${s.price.toFixed(2)} TL*\n`;
-            });
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                chat_id: chatId,
-                text: priceText,
-                parse_mode: "Markdown"
-            });
+            db.services.forEach(s => { priceText += `• ${s.name}: *${s.price.toFixed(2)} TL*\n`; });
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: chatId, text: priceText, parse_mode: "Markdown" });
         }
     }
 
     if (update.message && update.message.text) {
         const chatId = update.message.chat.id;
         const text = update.message.text.trim();
-
         if (text === '/start') {
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
                 chat_id: chatId,
                 text: `🤖 SMS Onay Paneline Hoş Geldiniz!\n\nAşağıdaki menüden dilediğiniz işlemi gerçekleştirebilirsiniz:`,
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: "🌐 Web Paneline Git", url: RENDER_EXTERNAL_URL }],
-                        [{ text: "💰 Fiyat Listesi", callback_data: "menu_prices" }]
-                    ]
-                }
+                reply_markup: { inline_keyboard: [[{ text: "🌐 Web Paneline Git", url: RENDER_EXTERNAL_URL }], [{ text: "💰 Fiyat Listesi", callback_data: "menu_prices" }]] }
             });
         }
     }
-
     res.sendStatus(200);
 });
 
-// --- VIP ARAYÜZ (MATRIX ARKA PLAN + ANİMASYONLAR + RESUL SAKAL IBAN) ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -332,7 +313,7 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <!-- DEPOSIT MODAL (RESUL SAKAL IBAN) -->
+        <!-- DEPOSIT MODAL -->
         <div id="depositModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center hidden z-50">
             <div class="bg-slate-900 border border-emerald-500/40 p-8 rounded-3xl w-full max-w-md relative shadow-2xl">
                 <button onclick="document.getElementById('depositModal').classList.add('hidden')" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
@@ -354,10 +335,7 @@ app.get('/', (req, res) => {
         <script>
             const canvas = document.getElementById('matrixCanvas');
             const ctx = canvas.getContext('2d');
-            function resizeCanvas() {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
-            }
+            function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
             window.addEventListener('resize', resizeCanvas);
             resizeCanvas();
 
@@ -385,10 +363,7 @@ app.get('/', (req, res) => {
             let currentRole = localStorage.getItem('currentRole') || 'user';
             let activeAuthMode = 'login';
 
-            function init() {
-                updateUserArea();
-                loadServices();
-            }
+            function init() { updateUserArea(); loadServices(); }
 
             function updateUserArea() {
                 const area = document.getElementById('userArea');
@@ -466,7 +441,8 @@ app.get('/', (req, res) => {
                 const btn = document.getElementById('btn_' + productKey);
                 const originalText = btn.innerText;
                 btn.disabled = true;
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Alınıyor...';
+                // Kullanıcıya otomatik stok arandığını belirten animasyonlu mesaj
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Stok Bekleniyor...';
 
                 const res = await fetch('/api/buyNumber', {
                     method: 'POST',
@@ -491,7 +467,7 @@ app.get('/', (req, res) => {
                 area.innerHTML = \`
                     <div class="bg-slate-900/95 backdrop-blur-md border border-emerald-500/50 p-6 rounded-2xl shadow-2xl vip-card">
                         <div class="flex items-center justify-between mb-4">
-                            <h3 class="font-bold text-emerald-400 text-lg"><i class="fa-solid fa-circle-check text-emerald-400 mr-2"></i> Numara Başarıyla Alındı!</h3>
+                            <h3 class="font-bold text-emerald-400 text-lg"><i class="fa-solid fa-circle-check text-emerald-400 mr-2"></i> Numara Başarıyla Yakalandı!</h3>
                             <span class="bg-emerald-500/20 text-emerald-400 text-xs px-3 py-1 rounded-full font-mono font-bold animate-pulse">AKTİF</span>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -510,12 +486,10 @@ app.get('/', (req, res) => {
                 const interval = setInterval(async () => {
                     const res = await fetch(\`/api/checkSms/\${id}\`);
                     const data = await res.json();
-                    if (data.success) {
-                        if (data.status === 'completed') {
-                            document.getElementById('smsCode').innerText = data.code;
-                            clearInterval(interval);
-                            alert("SMS Kodu Başarıyla Geldi: " + data.code);
-                        }
+                    if (data.success && data.status === 'completed') {
+                        document.getElementById('smsCode').innerText = data.code;
+                        clearInterval(interval);
+                        alert("SMS Kodu Başarıyla Geldi: " + data.code);
                     }
                 }, 3000);
             }
@@ -569,10 +543,7 @@ app.get('/', (req, res) => {
                 const main = document.getElementById('mainContent');
                 const res = await fetch(\`/api/admin/getData?adminUsername=\${currentUser}\`);
                 const data = await res.json();
-                if (!data.success) {
-                    alert("Yetkisiz erişim!");
-                    return;
-                }
+                if (!data.success) { alert("Yetkisiz erişim!"); return; }
 
                 let paymentsHtml = '';
                 for (let id in data.payments) {
@@ -583,7 +554,7 @@ app.get('/', (req, res) => {
                                 <div><p class="font-bold">\${p.username} - \${p.amount} TL</p><p class="text-xs text-slate-400">Gönderen: \${p.senderName}</p></div>
                                 <div class="space-x-2">
                                     <button onclick="processPayment('\${p.id}', 'approve')" class="bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded-lg text-xs font-bold">Onayla</button>
-                                    <button onclick="processPayment('\${p.id}', 'reject')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-lg text-xs font-bold">Reddet</button>
+                                    <button onclick="processPayment('\${p.id}', 'reject')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-lg text-xs font-bold">Reddet신</button>
                                 </div>
                             </div>
                         \`;
