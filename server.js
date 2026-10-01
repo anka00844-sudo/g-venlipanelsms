@@ -13,7 +13,7 @@ const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipane
 const ONAYLI_SMS_API_KEY = 'osms_24a366588a5adf689da78bd656ef845effba51b53754bf57';
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
 
-// Veritabanı ve Hizmetler (İstediğin Fiyatlar ve Doğru API Kodları)
+// Veritabanı ve Doğru API Kodları (Eski Sorunsuz Sistem Parametreleri)
 let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
@@ -149,7 +149,6 @@ app.post('/api/buyNumber', async (req, res) => {
     }
 
     try {
-        // OnaylıSMS API'ye istek atma (Doğru parametre yapısı)
         const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`;
         console.log("API İstek URL:", targetUrl);
 
@@ -353,7 +352,6 @@ app.get('/', (req, res) => {
         </div>
 
         <script>
-            // Matrix Efekti Arka Plan
             const canvas = document.getElementById('matrixCanvas');
             const ctx = canvas.getContext('2d');
             function resizeCanvas() {
