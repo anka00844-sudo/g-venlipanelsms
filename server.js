@@ -17,14 +17,12 @@ let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
-    // Sağlayıcının standart kısa kodlarına (wa, tg vb.) göre güncellendi
+    // Manuel servis listesi (API'den dinamik çekilemediği durumlarda yedek olarak çalışır)
     services: [
-        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "wa", country: "0", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, serviceCode: "wa", country: "16", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "wa", country: "5", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "tg", country: "0", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "tg_us", name: "Telegram Amerika", price: 150.00, serviceCode: "tg", country: "187", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "gg_tr", name: "Google Türkiye", price: 50.00, serviceCode: "googleservices", country: "0", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "whatsapp", country: "0", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, serviceCode: "whatsapp", country: "16", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "telegram", country: "0", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "gg_tr", name: "Google Türkiye", price: 50.00, serviceCode: "google", country: "0", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
         { id: "dc_tr", name: "Discord Türkiye", price: 50.00, serviceCode: "discord", country: "0", icon: "fa-discord", color: "text-indigo-400", bg: "bg-indigo-500/10" }
     ],
     payments: {},
@@ -133,7 +131,18 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// --- GELİŞTİRİLMİŞ ONAYLI SMS API ENTEGRASYONU ---
+// --- KESİN ÇÖZÜM: GELİŞMİŞ API NUMARA ÇEKME VE TEST ROTASI ---
+app.get('/api/admin/testApi', async (req, res) => {
+    try {
+        // Sağlayıcının fiyat/servis listesini çekerek hangi kodların geçerli olduğunu konsola basıyoruz
+        const listUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getPrices`;
+        const apiResp = await axios.get(listUrl);
+        res.json({ success: true, rawApiData: apiResp.data });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.post('/api/buyNumber', async (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
@@ -144,68 +153,58 @@ app.post('/api/buyNumber', async (req, res) => {
         return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
     }
 
-    let maxAttempts = 3;
-    let attempts = 0;
+    // Sağlayıcının farklı varyasyonlardaki servis kodlarını denemesi için dizi oluşturuyoruz
+    // (Örn: Hem 'whatsapp' hem 'wa' kodlarını sırayla dener)
+    const codeVariants = [service.serviceCode];
+    if (service.serviceCode === 'whatsapp') codeVariants.push('wa');
+    if (service.serviceCode === 'telegram') codeVariants.push('tg');
 
-    while (attempts < maxAttempts) {
-        attempts++;
+    let successOrder = null;
+
+    for (let code of codeVariants) {
         try {
-            // URL parametre yapısı tam uyumlu hale getirildi
-            const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`;
-            console.log(`[Stok Denemesi #${attempts}] İstek Atılan URL:`, targetUrl);
+            const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${code}&country=${service.country}`;
+            console.log(`[API İstek] Denenen URL: ${targetUrl}`);
 
             const apiResponse = await axios.get(targetUrl);
             let responseText = apiResponse.data;
-            
-            // Eğer yanıt nesne olarak dönüyorsa stringe çevir
-            if (typeof responseText === 'object') {
-                responseText = JSON.stringify(responseText);
-            }
-            console.log("API Ham Yanıtı:", responseText);
+            if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
 
-            if (typeof responseText === 'string') {
-                if (responseText.includes('ACCESS_NUMBER')) {
-                    // Örnek format: ACCESS_NUMBER:184213:628123456789 veya ACCESS_NUMBER:id:telefon
-                    const parts = responseText.split(':');
-                    const activationId = parts[1];
-                    const phoneNumber = parts.slice(2).join(':'); // Numarada iki nokta olma ihtimaline karşı
+            console.log(`[API Yanıt] Kod (${code}):`, responseText);
 
-                    userObj.balance -= service.price;
+            if (typeof responseText === 'string' && responseText.includes('ACCESS_NUMBER')) {
+                const parts = responseText.split(':');
+                const activationId = parts[1];
+                const phoneNumber = parts.slice(2).join(':');
 
-                    const order = {
-                        activationId,
-                        productName: service.name,
-                        phoneNumber,
-                        code: "Bekleniyor...",
-                        status: 'waiting',
-                        username,
-                        time: new Date().toLocaleString('tr-TR')
-                    };
+                userObj.balance -= service.price;
 
-                    db.orders[activationId] = order;
-                    return res.json({ success: true, order });
-                } else if (responseText.includes('NO_NUMBERS') || responseText.includes('FULL_NUMBERS')) {
-                    console.log(`Stok yok, tekrar deneniyor... (${attempts}/${maxAttempts})`);
-                } else {
-                    console.log("Bilinmeyen API Yanıtı:", responseText);
-                    if (attempts === maxAttempts) {
-                        return res.json({ success: false, message: "Sağlayıcı Yanıtı: " + responseText });
-                    }
-                }
+                successOrder = {
+                    activationId,
+                    productName: service.name,
+                    phoneNumber,
+                    code: "Bekleniyor...",
+                    status: 'waiting',
+                    username,
+                    time: new Date().toLocaleString('tr-TR')
+                };
+
+                db.orders[activationId] = successOrder;
+                break; // Başarılı olursa döngüden çık
             }
         } catch (error) {
-            console.error("OnaylıSMS API Bağlantı Hatası:", error.message);
-        }
-
-        if (attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.error("API Bağlantı Hatası:", error.message);
         }
     }
 
-    return res.json({ 
-        success: false, 
-        message: "Şu anda bu servis için aktif numara stoğu bulunamadı (NO_NUMBERS). Lütfen farklı bir ülke veya servis deneyin." 
-    });
+    if (successOrder) {
+        return res.json({ success: true, order: successOrder });
+    } else {
+        return res.json({ 
+            success: false, 
+            message: "Sağlayıcı stok vermedi (NO_NUMBERS). Lütfen Render loglarını kontrol edin veya sağlayıcı bakiyenizi/servis kodunuzu doğrulayın." 
+        });
+    }
 });
 
 app.get('/api/checkSms/:id', async (req, res) => {
@@ -594,6 +593,10 @@ app.get('/', (req, res) => {
                         <h3 class="font-bold text-md mb-2">Bekleyen Ödemeler</h3>
                         \${paymentsHtml || '<p class="text-sm text-slate-500 mb-6">Bekleyen ödeme yok.</p>'}
                         
+                        <div class="mt-4">
+                            <a href="/api/admin/testApi" target="_blank" class="inline-block bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl text-xs font-bold text-white shadow"><i class="fa-solid fa-code mr-1"></i> API Sağlayıcı Servis Listesini Test Et (JSON)</a>
+                        </div>
+
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                             <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
                                 <h4 class="font-bold text-sm text-emerald-400 mb-2">Son Ziyaretçiler (IP)</h4>
