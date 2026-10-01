@@ -31,78 +31,88 @@ app.use((req, res, next) => {
     next();
 });
 
-// SAĞLAYICIDAN TÜM ÜLKE, FİYAT VE STOKLARI CANLI ÇEKEN ENDPOINT
+// TÜM ÜLKE VE SERVİSLERİ EKSİZSİZ LİSTELEYEN ENDPOINT
 app.get('/api/getServices', async (req, res) => {
     try {
         const listUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getPrices`;
         const apiResp = await axios.get(listUrl);
-        const data = apiResp.data;
+        const apiData = apiResp.data;
 
-        let dynamicServices = [];
+        let allServices = [];
 
-        // OnaylıSMS/SMS-Activate JSON yapısını tam çözümleme (Ülke -> Servis kodları)
-        if (data && typeof data === 'object') {
-            for (let countryId in data) {
-                let countryServices = data[countryId];
+        // Popüler servis kodları ve görsel karşılıkları
+        const serviceMeta = {
+            'wa': { name: 'WhatsApp', icon: 'fa-whatsapp', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+            'tg': { name: 'Telegram', icon: 'fa-telegram', color: 'text-blue-400', bg: 'bg-blue-500/10' },
+            'goo': { name: 'Google / Gmail', icon: 'fa-google', color: 'text-amber-400', bg: 'bg-amber-500/10' },
+            'ig': { name: 'Instagram', icon: 'fa-instagram', color: 'text-pink-400', bg: 'bg-pink-500/10' },
+            'tw': { name: 'Twitter / X', icon: 'fa-twitter', color: 'text-sky-400', bg: 'bg-sky-500/10' },
+            'fb': { name: 'Facebook', icon: 'fa-facebook', color: 'text-blue-500', bg: 'bg-blue-600/10' },
+            'nf': { name: 'Netflix', icon: 'fa-film', color: 'text-red-500', bg: 'bg-red-500/10' },
+            'ds': { name: 'Discord', icon: 'fa-discord', color: 'text-indigo-400', bg: 'bg-indigo-500/10' }
+        };
+
+        // Ülke kodu isim karşılıkları
+        const countryNames = {
+            '90': 'Türkiye',
+            '1': 'Amerika / Kanada',
+            '44': 'İngiltere',
+            '7': 'Rusya',
+            '63': 'Filipinler',
+            '62': 'Endonezya',
+            '84': 'Vietnam',
+            '91': 'Hindistan',
+            '55': 'Brezilya',
+            '33': 'Fransa',
+            '49': 'Almanya'
+        };
+
+        if (apiData && typeof apiData === 'object') {
+            for (let countryId in apiData) {
+                let countryServices = apiData[countryId];
                 for (let serviceCode in countryServices) {
                     let sInfo = countryServices[serviceCode];
-                    let count = sInfo.count !== undefined ? sInfo.count : (sInfo.stock !== undefined ? sInfo.stock : 10);
+                    // Stok ve fiyat bilgisi
+                    let count = sInfo.count !== undefined ? sInfo.count : (sInfo.stock !== undefined ? sInfo.stock : 0);
                     let price = sInfo.cost !== undefined ? sInfo.cost : (sInfo.price !== undefined ? sInfo.price : 50);
 
-                    // Servis adını ve ikonunu güzelleştirelim
-                    let name = serviceCode.toUpperCase();
-                    let icon = "fa-globe";
-                    let color = "text-emerald-400";
-                    let bg = "bg-emerald-500/10";
+                    let meta = serviceMeta[serviceCode.toLowerCase()] || {
+                        name: serviceCode.toUpperCase(),
+                        icon: 'fa-globe',
+                        color: 'text-emerald-400',
+                        bg: 'bg-emerald-500/10'
+                    };
 
-                    if (serviceCode.toLowerCase().includes('wa') || serviceCode.toLowerCase().includes('whatsapp')) {
-                        name = `WhatsApp (Ülke: ${countryId})`;
-                        icon = "fa-whatsapp";
-                        color = "text-emerald-400";
-                        bg = "bg-emerald-500/10";
-                    } else if (serviceCode.toLowerCase().includes('tg') || serviceCode.toLowerCase().includes('telegram')) {
-                        name = `Telegram (Ülke: ${countryId})`;
-                        icon = "fa-telegram";
-                        color = "text-blue-400";
-                        bg = "bg-blue-500/10";
-                    } else if (serviceCode.toLowerCase().includes('goo') || serviceCode.toLowerCase().includes('gmail')) {
-                        name = `Google (Ülke: ${countryId})`;
-                        icon = "fa-google";
-                        color = "text-amber-400";
-                        bg = "bg-amber-500/10";
-                    } else if (serviceCode.toLowerCase().includes('ig') || serviceCode.toLowerCase().includes('insta')) {
-                        name = `Instagram (Ülke: ${countryId})`;
-                        icon = "fa-instagram";
-                        color = "text-pink-400";
-                        bg = "bg-pink-500/10";
-                    } else {
-                        name = `${serviceCode.toUpperCase()} (Ülke: ${countryId})`;
-                    }
+                    let cName = countryNames[countryId] || `Ülke Kodu: ${countryId}`;
 
-                    dynamicServices.push({
+                    allServices.push({
                         id: `${serviceCode}_${countryId}`,
-                        name: name,
+                        name: `${meta.name} (${cName})`,
                         price: parseFloat(price),
                         serviceCode: serviceCode,
                         country: countryId.toString(),
                         stock: parseInt(count),
-                        icon: icon,
-                        color: color,
-                        bg: bg
+                        icon: meta.icon,
+                        color: meta.color,
+                        bg: meta.bg
                     });
                 }
             }
         }
 
-        // Eğer API boş dönerse veya yapı farklıysa varsayılan listeyi sunalım ki panel boş kalmasın
-        if (dynamicServices.length === 0) {
-            dynamicServices = [
-                { id: "wa_90", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "wa", country: "90", stock: 15, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-                { id: "tg_1", name: "Telegram Amerika", price: 180.00, serviceCode: "tg", country: "1", stock: 10, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" }
+        // Eğer API'den veri çekilemezse veya boş dönerse genişletilmiş yedek liste sunalım
+        if (allServices.length === 0) {
+            allServices = [
+                { id: "wa_90", name: "WhatsApp (Türkiye)", price: 300.00, serviceCode: "wa", country: "90", stock: 15, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+                { id: "wa_63", name: "WhatsApp (Filipinler)", price: 150.00, serviceCode: "wa", country: "63", stock: 20, icon: "fa-whatsapp", color: "text-emerald-500/10", bg: "bg-emerald-500/10" },
+                { id: "tg_1", name: "Telegram (Amerika)", price: 180.00, serviceCode: "tg", country: "1", stock: 10, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+                { id: "tg_90", name: "Telegram (Türkiye)", price: 200.00, serviceCode: "tg", country: "90", stock: 8, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+                { id: "goo_90", name: "Google / Gmail (Türkiye)", price: 50.00, serviceCode: "goo", country: "90", stock: 25, icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+                { id: "ig_90", name: "Instagram (Türkiye)", price: 90.00, serviceCode: "ig", country: "90", stock: 12, icon: "fa-instagram", color: "text-pink-400", bg: "bg-pink-500/10" }
             ];
         }
 
-        res.json({ success: true, services: dynamicServices.slice(0, 30) }); // Performans için ilk 30 aktif servisi listeleyelim
+        res.json({ success: true, services: allServices });
     } catch (e) {
         res.json({ success: false, services: [], message: e.message });
     }
@@ -241,7 +251,7 @@ app.post('/api/buyNumber', async (req, res) => {
         } else {
             return res.json({ 
                 success: false, 
-                message: `Sağlayıcı Yanıtı: ${responseText} (Anlık stok tükenmiş olabilir)` 
+                message: `Sağlayıcı Yanıtı: ${responseText} (Stok tükenmiş veya servis yoğun)` 
             });
         }
 
@@ -346,7 +356,7 @@ app.get('/', (req, res) => {
                     </div>
                     <div>
                         <h1 class="text-xl font-black tracking-wider text-emerald-400">VIP SMS ONAY</h1>
-                        <p class="text-[10px] text-emerald-500/80 font-mono">ANLIK CANLI STOK (HER SANİYE GÜNCELLENİR)</p>
+                        <p class="text-[10px] text-emerald-500/80 font-mono">TÜM ÜLKELER VE CANLI STOK</p>
                     </div>
                 </div>
                 <div id="userArea" class="flex items-center gap-4"></div>
@@ -441,7 +451,7 @@ app.get('/', (req, res) => {
                     let grid = document.getElementById('servicesGrid');
 
                     if (isInitial || !grid) {
-                        let html = \`<div id="servicesGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4">\`;
+                        let html = \`<div id="servicesGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[600px] overflow-y-auto pr-2">\`;
                         data.services.forEach(s => {
                             html += renderServiceCard(s);
                         });
@@ -450,7 +460,7 @@ app.get('/', (req, res) => {
                         </div><div id="activeOrderArea" class="mt-8"></div>\`;
                         main.innerHTML = html;
                     } else {
-                        // Sadece her saniye stok ve buton durumlarını güncelle (sayfa titremeden)
+                        // Sadece her saniye stokları ve butonları sessizce güncelle
                         data.services.forEach(s => {
                             const stockEl = document.getElementById('stock_' + s.id);
                             const btnEl = document.getElementById('btn_' + s.id);
@@ -460,11 +470,11 @@ app.get('/', (req, res) => {
                             if (btnEl && !btnEl.dataset.buying) {
                                 if (s.stock <= 0) {
                                     btnEl.disabled = true;
-                                    btnEl.className = "bg-slate-800 text-slate-500 px-5 py-2.5 rounded-xl text-sm font-bold cursor-not-allowed";
+                                    btnEl.className = "bg-slate-800 text-slate-500 px-4 py-2 rounded-xl text-xs font-bold cursor-not-allowed";
                                     btnEl.innerText = "Tükendi";
                                 } else {
                                     btnEl.disabled = false;
-                                    btnEl.className = "bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition";
+                                    btnEl.className = "bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition";
                                     btnEl.innerText = "Numara Al";
                                 }
                             }
@@ -476,17 +486,17 @@ app.get('/', (req, res) => {
             function renderServiceCard(s) {
                 const isOutOfStock = s.stock <= 0;
                 return \`
-                    <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex items-center justify-between shadow-xl hover:border-emerald-500/50 transition">
-                        <div class="flex items-center gap-4">
-                            <div class="\${s.bg} \${s.color} w-12 h-12 rounded-xl flex items-center justify-center text-xl border border-emerald-500/20">
+                    <div class="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between shadow-xl hover:border-emerald-500/50 transition">
+                        <div class="flex items-center gap-3">
+                            <div class="\${s.bg} \${s.color} w-10 h-10 rounded-xl flex items-center justify-center text-lg border border-emerald-500/20">
                                 <i class="fa-brands \${s.icon}"></i>
                             </div>
                             <div>
-                                <h3 class="font-bold text-sm text-white">\${s.name}</h3>
-                                <p class="text-emerald-400 font-bold text-sm">\${s.price.toFixed(2)} TL <span id="stock_\${s.id}" class="text-xs ml-2 font-mono">\${isOutOfStock ? '<span class="text-red-400 font-bold">Stok Yok</span>' : '<span class="text-emerald-400 font-bold">' + s.stock + ' Adet Stok</span>'}</span></p>
+                                <h3 class="font-bold text-xs text-white">\${s.name}</h3>
+                                <p class="text-emerald-400 font-bold text-xs mt-0.5">\${s.price.toFixed(2)} TL <span id="stock_\${s.id}" class="text-[10px] ml-1.5 font-mono">\${isOutOfStock ? '<span class="text-red-400 font-bold">Stok Yok</span>' : '<span class="text-emerald-400 font-bold">' + s.stock + ' Adet Stok</span>'}</span></p>
                             </div>
                         </div>
-                        <button id="btn_\${s.id}" \${isOutOfStock ? 'disabled class="bg-slate-800 text-slate-500 px-5 py-2.5 rounded-xl text-sm font-bold cursor-not-allowed"' : \`onclick="buyNumber('\${s.serviceCode}', '\${s.country}', \${s.price}, '\${s.name}', '\${s.id}')"\` } class="\${isOutOfStock ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 shadow-lg transition'} px-5 py-2.5 rounded-xl text-sm font-bold">\${isOutOfStock ? 'Tükendi' : 'Numara Al'}</button>
+                        <button id="btn_\${s.id}" \${isOutOfStock ? 'disabled class="bg-slate-800 text-slate-500 px-4 py-2 rounded-xl text-xs font-bold cursor-not-allowed"' : \`onclick="buyNumber('\${s.serviceCode}', '\${s.country}', \${s.price}, '\${s.name}', '\${s.id}')"\` } class="\${isOutOfStock ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 shadow-lg transition'} px-4 py-2 rounded-xl text-xs font-bold">\${isOutOfStock ? 'Tükendi' : 'Numara Al'}</button>
                     </div>
                 \`;
             }
