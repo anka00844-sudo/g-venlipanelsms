@@ -79,7 +79,7 @@ app.post('/api/deposit/notify', async (req, res) => {
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
 
     const paymentId = 'pay_' + Date.now();
-    db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR') });
+    db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR') };
 
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -143,7 +143,6 @@ app.post('/api/buyNumber', async (req, res) => {
         return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
     }
 
-    // Maksimum 15 kez (yaklaşık 30-45 saniye boyunca) arkada saniyede bir stok yoklama döngüsü çalıştırır
     let attempts = 0;
     const maxAttempts = 15;
 
@@ -181,7 +180,6 @@ app.post('/api/buyNumber', async (req, res) => {
             console.error("OnaylıSMS API Bağlantı Hatası:", error.message);
         }
 
-        // Eğer stok yoksa (NO_NUMBERS vb.), 2 saniye bekleyip tekrar denesin
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
@@ -441,7 +439,6 @@ app.get('/', (req, res) => {
                 const btn = document.getElementById('btn_' + productKey);
                 const originalText = btn.innerText;
                 btn.disabled = true;
-                // Kullanıcıya otomatik stok arandığını belirten animasyonlu mesaj
                 btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Stok Bekleniyor...';
 
                 const res = await fetch('/api/buyNumber', {
@@ -554,7 +551,7 @@ app.get('/', (req, res) => {
                                 <div><p class="font-bold">\${p.username} - \${p.amount} TL</p><p class="text-xs text-slate-400">Gönderen: \${p.senderName}</p></div>
                                 <div class="space-x-2">
                                     <button onclick="processPayment('\${p.id}', 'approve')" class="bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded-lg text-xs font-bold">Onayla</button>
-                                    <button onclick="processPayment('\${p.id}', 'reject')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-lg text-xs font-bold">Reddet신</button>
+                                    <button onclick="processPayment('\${p.id}', 'reject')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-lg text-xs font-bold">Reddet</button>
                                 </div>
                             </div>
                         \`;
