@@ -90,7 +90,7 @@ const CATALOG = [
     { id: 'wa_tr', key: 'tr', name: 'WhatsApp Türkiye',    serviceCode: 'wa', defCountry: '62',  price: 300 },
     { id: 'tg_tr', key: 'tr', name: 'Telegram Türkiye',    serviceCode: 'tg', defCountry: '62',  price: 200 },
     { id: 'wa_ph', key: 'ph', name: 'WhatsApp Filipinler', serviceCode: 'wa', defCountry: '4',   price: 200 },
-    { id: 'tg_us', key: 'us', name: 'Telegram ABD',        serviceCode: 'tg', defCountry: '187', price: 200 }
+    { id: 'tg_us', key: 'us', name: 'Telegram ABD',        serviceCode: 'tg', defCountry: '187', alt: ['12'], price: 200 }
 ];
 const COUNTRY_WANT = {
     tr: ['turkey', 'türkiye', 'turkiye', 'турция'],
@@ -201,15 +201,11 @@ app.get('/api/getServices', async (req, res) => {
     for (const item of CATALOG) {
         if (q && !item.name.toLowerCase().includes(q)) continue;
         const meta = SERVICE_INFO[item.serviceCode];
-        const country = await countryOf(item);
-        const st = await getStock(country, item.serviceCode);
         list.push({
             id: item.id,
             name: item.name,
             price: item.price,
             serviceCode: item.serviceCode,
-            country: country,
-            stockText: st === null ? 'Stok: kontrol edilemedi' : (st > 0 ? st + ' Adet Stok' : 'Stok Yok'),
             icon: meta.icon, iconType: meta.type, color: meta.color, bg: meta.bg
         });
     }
@@ -349,25 +345,35 @@ app.post('/api/buyNumber', async (req, res) => {
     const price = item.price; // fiyat sunucudan, müşteri değiştiremez
     if (userObj.balance < price) return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
 
-    try {
-        const country = await countryOf(item);
-        let responseText = '';
+    const showDetail = userObj.role === 'admin';
 
-        // Sağlayıcı anlık "NO_NUMBERS" dönebiliyor; 3 kez dene
-        for (let attempt = 0; attempt < 3; attempt++) {
-            const resp = await axios.get(ONAYLI_SMS_URL, {
-                params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: country },
-                timeout: 30000
-            });
-            responseText = resp.data;
-            if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
-            responseText = responseText ? String(responseText).trim() : '';
-            console.log('[getNumber] ' + item.id + ' country=' + country + ' deneme=' + (attempt + 1) + ' -> "' + responseText + '"');
-            if (responseText.startsWith('NO_NUMBERS') && attempt < 2) {
-                await new Promise(r => setTimeout(r, 1500));
-                continue;
+    try {
+        const main = await countryOf(item);
+        const countries = [main].concat((item.alt || []).filter(c => c !== main));
+        let responseText = '';
+        let usedCountry = main;
+
+        outer:
+        for (const country of countries) {
+            usedCountry = country;
+            // Sağlayıcı anlık "NO_NUMBERS" dönebiliyor; ülke başına 2 kez dene
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const resp = await axios.get(ONAYLI_SMS_URL, {
+                    params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: country },
+                    timeout: 30000
+                });
+                responseText = resp.data;
+                if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
+                responseText = responseText ? String(responseText).trim() : '';
+                console.log('[getNumber] ' + item.id + ' country=' + country + ' deneme=' + (attempt + 1) + ' -> "' + responseText + '"');
+
+                if (responseText.startsWith('ACCESS_NUMBER')) break outer;
+                if (responseText.startsWith('NO_NUMBERS')) {
+                    if (attempt < 1) await new Promise(r => setTimeout(r, 1200));
+                    continue;
+                }
+                break outer; // başka bir hata (bakiye, anahtar vb.) -> tekrar deneme
             }
-            break;
         }
 
         if (responseText.startsWith('ACCESS_NUMBER')) {
@@ -392,14 +398,18 @@ app.post('/api/buyNumber', async (req, res) => {
         }
 
         const key = responseText.split(':')[0];
-        let msg = PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText);
-        if (['NO_NUMBERS', 'BAD_COUNTRY', 'WRONG_SERVICE', 'BAD_SERVICE'].includes(key)) {
-            msg += ' [sağlayıcı kodu: ' + key + ', ülke ID: ' + country + ', servis: ' + item.serviceCode + ']';
+        let msg;
+        if (showDetail) {
+            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [kod: ' + key + ', ülke ID: ' + usedCountry + ', servis: ' + item.serviceCode + ']';
+        } else if (key === 'NO_NUMBERS') {
+            msg = 'Bu ürün için şu an numara bulunamadı. Lütfen birkaç dakika sonra tekrar deneyin.';
+        } else {
+            msg = 'Şu an numara alınamıyor, lütfen daha sonra tekrar deneyin.';
         }
         return res.json({ success: false, message: msg });
     } catch (error) {
         console.error("API Bağlantı Hatası:", error.message);
-        return res.json({ success: false, message: "Sağlayıcı bağlantı hatası: " + error.message });
+        return res.json({ success: false, message: showDetail ? ("Sağlayıcı bağlantı hatası: " + error.message) : "Bağlantı hatası, lütfen tekrar deneyin." });
     }
 });
 
@@ -508,17 +518,36 @@ app.get('/', (req, res) => {
         <title>VIP SMS Onay Paneli</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+        <style>
+            body { background: #000; }
+            #matrix { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+            .glitch { animation: glitch 2.5s infinite; text-shadow: 0 0 14px #22c55e; }
+            @keyframes glitch { 0%,88%,100% { transform: none; opacity: 1; } 90% { transform: translate(-3px,1px); opacity: .75; } 93% { transform: translate(3px,-1px); } 96% { transform: translate(-2px,0); opacity: .9; } }
+            .blink { animation: blink 1s steps(2) infinite; }
+            @keyframes blink { 50% { opacity: 0; } }
+            .fadeUp { animation: fadeUp 1s ease both; }
+            @keyframes fadeUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+            .neon { box-shadow: 0 0 25px rgba(34,197,94,.25), inset 0 0 25px rgba(34,197,94,.05); }
+        </style>
     </head>
     <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between">
-        <div class="max-w-5xl mx-auto w-full p-4">
-            <header class="flex justify-between items-center py-4 px-6 border border-emerald-500/30 mb-6 bg-slate-900/80 rounded-2xl shadow-2xl">
+        <canvas id="matrix"></canvas>
+        <div id="introOverlay" onclick="closeIntro()" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:100;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .8s;cursor:pointer;">
+            <div class="font-mono text-emerald-400 text-sm md:text-lg p-6" style="max-width:92%;text-shadow:0 0 8px #22c55e;">
+                <span id="introText"></span><span class="blink">&#9608;</span>
+                <p class="text-emerald-700 text-xs mt-6">(geçmek için dokun)</p>
+            </div>
+        </div>
+        <div class="max-w-5xl mx-auto w-full p-4 relative z-10">
+            <header class="flex justify-between items-center py-4 px-6 border border-emerald-500/30 mb-6 bg-black/70 backdrop-blur rounded-2xl shadow-2xl neon">
                 <div class="flex items-center gap-3">
                     <div class="bg-emerald-500/20 text-emerald-400 p-2.5 rounded-xl border border-emerald-500/40">
                         <i class="fa-solid fa-crown text-xl"></i>
                     </div>
                     <div>
                         <h1 class="text-xl font-black tracking-wider text-emerald-400">VIP SMS ONAY</h1>
-                        <p class="text-[10px] text-emerald-500/80 font-mono">CANLI STOK (20 SANİYEDE BİR GÜNCELLENİR)</p>
+                        <p class="text-[10px] text-emerald-500/80 font-mono">ANLIK SANAL NUMARA</p>
                     </div>
                 </div>
                 <div id="userArea" class="flex items-center gap-4"></div>
@@ -607,7 +636,12 @@ app.get('/', (req, res) => {
                         '<button onclick="openAuthModal(\\'login\\')" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold">Giriş Yap</button>' +
                         '<button onclick="openAuthModal(\\'register\\')" class="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl text-sm font-bold">Kayıt Ol</button>';
                     document.getElementById('mainContent').innerHTML =
-                        '<div class="text-center py-20 bg-slate-900/70 rounded-3xl border border-emerald-500/20 p-8"><h2 class="text-3xl font-black mb-4 text-emerald-400">VIP SMS Onay Paneli</h2><p class="text-slate-400 mb-6">Devam etmek için giriş yapın.</p></div>';
+                        '<div class="text-center py-16 bg-black/70 backdrop-blur rounded-3xl border border-emerald-500/30 p-8 fadeUp neon">' +
+                        '<i class="fa-solid fa-crown text-5xl text-emerald-400 mb-6"></i>' +
+                        '<h2 class="glitch text-4xl md:text-5xl font-black mb-4 text-emerald-400 font-mono tracking-widest">VIP SMS ONAY</h2>' +
+                        '<p class="text-emerald-300/80 font-mono mb-8">Anlık sanal numara &bull; Hızlı SMS kodu &bull; 7/24 aktif<span class="blink">_</span></p>' +
+                        '<div class="flex gap-3 justify-center"><button onclick="openLogin()" class="bg-emerald-600 hover:bg-emerald-500 px-8 py-3 rounded-xl font-bold neon">Giriş Yap</button>' +
+                        '<button onclick="openRegister()" class="bg-black/60 border border-emerald-500/40 hover:bg-emerald-900/40 px-8 py-3 rounded-xl font-bold text-emerald-300">Kayıt Ol</button></div></div>';
                 }
             }
 
@@ -643,11 +677,11 @@ app.get('/', (req, res) => {
             }
 
             function renderServiceCard(s) {
-                return '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex items-center justify-between shadow-xl hover:border-emerald-500/50 transition">' +
+                return '<div class="bg-black/70 backdrop-blur border border-emerald-500/20 p-5 rounded-2xl flex items-center justify-between shadow-xl hover:border-emerald-400 transition">' +
                     '<div class="flex items-center gap-4">' +
                     '<div class="' + s.bg + ' ' + s.color + ' w-12 h-12 rounded-xl flex items-center justify-center text-xl border border-emerald-500/20"><i class="' + s.iconType + ' ' + s.icon + '"></i></div>' +
                     '<div><h3 class="font-bold text-sm text-white">' + s.name + '</h3>' +
-                    '<p class="text-emerald-400 font-bold text-sm">' + s.price.toFixed(2) + ' TL <span class="text-xs ml-2 font-mono text-emerald-400">' + s.stockText + '</span></p></div>' +
+                    '<p class="text-emerald-400 font-bold text-sm">' + s.price.toFixed(2) + ' TL</p></div>' +
                     '</div>' +
                     '<button data-id="' + s.id + '" onclick="buyNumber(this)" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition">Numara Al</button>' +
                     '</div>';
@@ -830,7 +864,70 @@ app.get('/', (req, res) => {
                 currentRole = 'user';
                 init();
             }
-            window.onload = init;
+                        function openLogin() { openAuthModal('login'); }
+            function openRegister() { openAuthModal('register'); }
+
+            function startMatrix() {
+                var c = document.getElementById('matrix');
+                if (!c) return;
+                var ctx = c.getContext('2d');
+                var chars = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789ABCDEFXYZ'.split('');
+                var fs = 16, drops = [];
+                function resize() {
+                    c.width = window.innerWidth;
+                    c.height = window.innerHeight;
+                    var cols = Math.floor(c.width / fs);
+                    drops = [];
+                    for (var i = 0; i < cols; i++) drops[i] = Math.random() * c.height / fs;
+                }
+                resize();
+                window.addEventListener('resize', resize);
+                setInterval(function () {
+                    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+                    ctx.fillRect(0, 0, c.width, c.height);
+                    ctx.font = fs + 'px monospace';
+                    for (var i = 0; i < drops.length; i++) {
+                        var ch = chars[Math.floor(Math.random() * chars.length)];
+                        ctx.fillStyle = Math.random() > 0.96 ? '#d1fae5' : '#22c55e';
+                        ctx.fillText(ch, i * fs, drops[i] * fs);
+                        if (drops[i] * fs > c.height && Math.random() > 0.975) drops[i] = 0;
+                        drops[i] += 1;
+                    }
+                }, 50);
+            }
+
+            var introClosed = false;
+            function closeIntro() {
+                if (introClosed) return;
+                introClosed = true;
+                var o = document.getElementById('introOverlay');
+                if (!o) return;
+                o.style.opacity = '0';
+                setTimeout(function () { o.style.display = 'none'; }, 850);
+            }
+
+            function runIntro() {
+                var lines = ['> SİSTEM BAŞLATILIYOR...', '> GÜVENLİ BAĞLANTI KURULUYOR...', '> SAĞLAYICI AĞINA ERİŞİLİYOR...', '> ERİŞİM İZNİ VERİLDİ', '> HOŞ GELDİN: VIP SMS ONAY'];
+                var el = document.getElementById('introText');
+                var out = '', li = 0, ci = 0;
+                function tick() {
+                    if (introClosed) return;
+                    if (li >= lines.length) { setTimeout(closeIntro, 700); return; }
+                    var line = lines[li];
+                    if (ci < line.length) {
+                        ci++;
+                        el.innerHTML = out + line.substring(0, ci);
+                        setTimeout(tick, 28);
+                    } else {
+                        out += line + '<br>';
+                        el.innerHTML = out;
+                        li++; ci = 0;
+                        setTimeout(tick, 250);
+                    }
+                }
+                tick();
+            }
+            window.onload = function () { startMatrix(); runIntro(); init(); };
         </script>
     </body>
     </html>
