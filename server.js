@@ -515,7 +515,7 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>VIP SMS Onay Paneli</title>
+        <title>Anka SMS</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
@@ -528,6 +528,11 @@ app.get('/', (req, res) => {
             @keyframes blink { 50% { opacity: 0; } }
             .fadeUp { animation: fadeUp 1s ease both; }
             @keyframes fadeUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+            .anka { background: linear-gradient(90deg,#f59e0b,#ef4444,#f59e0b); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: flame 3s linear infinite; }
+            .anka.glitch { text-shadow: none; filter: drop-shadow(0 0 12px rgba(249,115,22,.75)); animation: flame 3s linear infinite, glitch 2.5s infinite; }
+            @keyframes flame { to { background-position: 200% center; } }
+            .flameIcon { color: #f97316; text-shadow: 0 0 16px #f97316, 0 0 32px #ef4444; animation: flick 1.3s ease-in-out infinite; }
+            @keyframes flick { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12) translateY(-2px); opacity: .85; } }
             .neon { box-shadow: 0 0 25px rgba(34,197,94,.25), inset 0 0 25px rgba(34,197,94,.05); }
         </style>
     </head>
@@ -535,6 +540,7 @@ app.get('/', (req, res) => {
         <canvas id="matrix"></canvas>
         <div id="introOverlay" onclick="closeIntro()" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:100;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .8s;cursor:pointer;">
             <div class="font-mono text-emerald-400 text-sm md:text-lg p-6" style="max-width:92%;text-shadow:0 0 8px #22c55e;">
+                <div style="text-align:center;margin-bottom:18px"><i class="fa-solid fa-fire-flame-curved flameIcon" style="font-size:60px"></i></div>
                 <span id="introText"></span><span class="blink">&#9608;</span>
                 <p class="text-emerald-700 text-xs mt-6">(geçmek için dokun)</p>
             </div>
@@ -542,12 +548,12 @@ app.get('/', (req, res) => {
         <div class="max-w-5xl mx-auto w-full p-4 relative z-10">
             <header class="flex justify-between items-center py-4 px-6 border border-emerald-500/30 mb-6 bg-black/70 backdrop-blur rounded-2xl shadow-2xl neon">
                 <div class="flex items-center gap-3">
-                    <div class="bg-emerald-500/20 text-emerald-400 p-2.5 rounded-xl border border-emerald-500/40">
-                        <i class="fa-solid fa-crown text-xl"></i>
+                    <div class="bg-orange-500/15 p-2.5 rounded-xl border border-orange-500/50">
+                        <i class="fa-solid fa-fire-flame-curved text-xl flameIcon"></i>
                     </div>
                     <div>
-                        <h1 class="text-xl font-black tracking-wider text-emerald-400">VIP SMS ONAY</h1>
-                        <p class="text-[10px] text-emerald-500/80 font-mono">ANLIK SANAL NUMARA</p>
+                        <h1 class="anka text-2xl font-black tracking-widest">ANKA SMS</h1>
+                        <p class="text-[10px] text-emerald-500/80 font-mono">KÜLLERİNDEN DOĞAN SİSTEM</p>
                     </div>
                 </div>
                 <div id="userArea" class="flex items-center gap-4"></div>
@@ -606,7 +612,6 @@ app.get('/', (req, res) => {
 
             function buildMain() {
                 document.getElementById('mainContent').innerHTML =
-                    '<input type="text" id="serviceSearch" oninput="onSearch()" placeholder="Servis veya ülke ara (örn: whatsapp, telegram, türkiye)" class="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-white mb-4 focus:border-emerald-500">' +
                     '<div id="servicesGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4"><p class="text-slate-400 text-sm">Yükleniyor...</p></div>' +
                     '<div class="mt-6 flex justify-end"><button onclick="openDeposit()" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button></div>' +
                     '<div id="activeOrderArea" class="mt-8"></div>';
@@ -637,8 +642,8 @@ app.get('/', (req, res) => {
                         '<button onclick="openAuthModal(\\'register\\')" class="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl text-sm font-bold">Kayıt Ol</button>';
                     document.getElementById('mainContent').innerHTML =
                         '<div class="text-center py-16 bg-black/70 backdrop-blur rounded-3xl border border-emerald-500/30 p-8 fadeUp neon">' +
-                        '<i class="fa-solid fa-crown text-5xl text-emerald-400 mb-6"></i>' +
-                        '<h2 class="glitch text-4xl md:text-5xl font-black mb-4 text-emerald-400 font-mono tracking-widest">VIP SMS ONAY</h2>' +
+                        '<i class="fa-solid fa-fire-flame-curved text-6xl flameIcon mb-6"></i>' +
+                        '<h2 class="glitch anka text-5xl md:text-6xl font-black mb-4 font-mono tracking-widest">ANKA SMS</h2>' +
                         '<p class="text-emerald-300/80 font-mono mb-8">Anlık sanal numara &bull; Hızlı SMS kodu &bull; 7/24 aktif<span class="blink">_</span></p>' +
                         '<div class="flex gap-3 justify-center"><button onclick="openLogin()" class="bg-emerald-600 hover:bg-emerald-500 px-8 py-3 rounded-xl font-bold neon">Giriş Yap</button>' +
                         '<button onclick="openRegister()" class="bg-black/60 border border-emerald-500/40 hover:bg-emerald-900/40 px-8 py-3 rounded-xl font-bold text-emerald-300">Kayıt Ol</button></div></div>';
@@ -657,8 +662,7 @@ app.get('/', (req, res) => {
                 if (!currentUser) return;
                 var grid = document.getElementById('servicesGrid');
                 if (!grid) return; // admin panelindeyken çalışmasın
-                var searchEl = document.getElementById('serviceSearch');
-                var q = searchEl ? searchEl.value : '';
+                var q = '';
                 try {
                     var res = await fetch('/api/getServices?q=' + encodeURIComponent(q));
                     var data = await res.json();
@@ -907,7 +911,7 @@ app.get('/', (req, res) => {
             }
 
             function runIntro() {
-                var lines = ['> SİSTEM BAŞLATILIYOR...', '> GÜVENLİ BAĞLANTI KURULUYOR...', '> SAĞLAYICI AĞINA ERİŞİLİYOR...', '> ERİŞİM İZNİ VERİLDİ', '> HOŞ GELDİN: VIP SMS ONAY'];
+                var lines = ['> SİSTEM BAŞLATILIYOR...', '> GÜVENLİ BAĞLANTI KURULUYOR...', '> SAĞLAYICI AĞINA ERİŞİLİYOR...', '> ERİŞİM İZNİ VERİLDİ', '> ANKA KÜLLERİNDEN DOĞUYOR...', '> HOŞ GELDİN: ANKA SMS'];
                 var el = document.getElementById('introText');
                 var out = '', li = 0, ci = 0;
                 function tick() {
