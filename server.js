@@ -18,13 +18,13 @@ let db = {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
     services: [
-        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "wa", country: "0", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, serviceCode: "wa", country: "16", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "wa", country: "5", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "tg", country: "0", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "tg_us", name: "Telegram Amerika", price: 150.00, serviceCode: "tg", country: "187", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "gg_tr", name: "Google Türkiye", price: 50.00, serviceCode: "go", country: "0", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
-        { id: "dc_tr", name: "Discord Türkiye", price: 50.00, serviceCode: "ds", country: "0", icon: "fa-discord", color: "text-indigo-400", bg: "bg-indigo-500/10" }
+        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "whatsapp", country: "0", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, serviceCode: "whatsapp", country: "16", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "whatsapp", country: "5", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "telegram", country: "0", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "tg_us", name: "Telegram Amerika", price: 150.00, serviceCode: "telegram", country: "187", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "gg_tr", name: "Google Türkiye", price: 50.00, serviceCode: "google", country: "0", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+        { id: "dc_tr", name: "Discord Türkiye", price: 50.00, serviceCode: "discord", country: "0", icon: "fa-discord", color: "text-indigo-400", bg: "bg-indigo-500/10" }
     ],
     payments: {},
     visitors: [],
@@ -132,7 +132,7 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// --- ONAYLI SMS API ENTEGRASYONU (SINIRSIZ STOK YAKALAYICI DÖNGÜSÜ) ---
+// --- ONAYLI SMS API ENTEGRASYONU (GÜNCELLENMİŞ PARAMETRELER VE SINIRSIZ DÖNGÜ) ---
 app.post('/api/buyNumber', async (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
@@ -148,37 +148,43 @@ app.post('/api/buyNumber', async (req, res) => {
     while (true) {
         attempts++;
         try {
+            // OnaylıSMS API standart formatı: action=getNumber, service=..., country=...
             const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`;
-            console.log(`[Stok Denemesi #${attempts}] URL:`, targetUrl);
+            console.log(`[Stok Denemesi #${attempts}] Servis: ${service.serviceCode} Ülke: ${service.country} URL:`, targetUrl);
 
             const apiResponse = await axios.get(targetUrl);
             let responseText = apiResponse.data;
-            console.log("API Yanıtı:", responseText);
+            console.log("API Ham Yanıtı:", responseText);
 
-            if (typeof responseText === 'string' && responseText.includes('ACCESS_NUMBER')) {
-                const parts = responseText.split(':');
-                const activationId = parts[1];
-                const phoneNumber = parts[2];
+            if (typeof responseText === 'string') {
+                if (responseText.includes('ACCESS_NUMBER')) {
+                    const parts = responseText.split(':');
+                    const activationId = parts[1];
+                    const phoneNumber = parts[2];
 
-                userObj.balance -= service.price;
+                    userObj.balance -= service.price;
 
-                const order = {
-                    activationId,
-                    productName: service.name,
-                    phoneNumber,
-                    code: "Bekleniyor...",
-                    status: 'waiting',
-                    username,
-                    time: new Date().toLocaleString('tr-TR')
-                };
+                    const order = {
+                        activationId,
+                        productName: service.name,
+                        phoneNumber,
+                        code: "Bekleniyor...",
+                        status: 'waiting',
+                        username,
+                        time: new Date().toLocaleString('tr-TR')
+                    };
 
-                db.orders[activationId] = order;
-                return res.json({ success: true, order });
+                    db.orders[activationId] = order;
+                    return res.json({ success: true, order });
+                } else if (responseText.includes('NO_NUMBERS') || responseText.includes('BAD_KEY') || responseText.includes('ERROR_SQL')) {
+                    console.log(`Sağlayıcı yanıtı (${responseText}), tekrar deneniyor...`);
+                }
             }
         } catch (error) {
             console.error("OnaylıSMS API Bağlantı Hatası:", error.message);
         }
 
+        // 2 saniye arayla tekrar yokla
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
 });
@@ -617,3 +623,4 @@ app.listen(PORT, async () => {
         console.error("Webhook bağlantı hatası:", err.message);
     }
 });
+        
