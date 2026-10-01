@@ -16,14 +16,14 @@ let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
-    // İstediğin tam 6 servis ve OnaylıSMS servis/ülke kodları
+    // Tüm servis kodları OnaylıSMS standartlarına göre güncellendi (No numbers hatası giderildi)
     services: [
-        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "wa", country: "90", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "wa", country: "63", icon: "fa-whatsapp", color: "text-emerald-500/10" },
-        { id: "tg_us", name: "Telegram Amerika", price: 180.00, serviceCode: "tg", country: "1", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "tg", country: "90", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "goo_tr", name: "Google Türkiye", price: 50.00, serviceCode: "goo", country: "90", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
-        { id: "ig_tr", name: "Instagram Türkiye", price: 90.00, serviceCode: "ig", country: "90", icon: "fa-instagram", color: "text-pink-400", bg: "bg-pink-500/10" }
+        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "whatsapp", country: "90", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "whatsapp", country: "63", icon: "fa-whatsapp", color: "text-emerald-500/10" },
+        { id: "tg_us", name: "Telegram Amerika", price: 180.00, serviceCode: "telegram", country: "1", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "telegram", country: "90", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "goo_tr", name: "Google Türkiye", price: 50.00, serviceCode: "google", country: "90", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+        { id: "ig_tr", name: "Instagram Türkiye", price: 90.00, serviceCode: "instagram", country: "90", icon: "fa-instagram", color: "text-pink-400", bg: "bg-pink-500/10" }
     ],
     payments: {},
     visitors: [],
@@ -135,7 +135,7 @@ app.get('/api/admin/testApi', async (req, res) => {
     }
 });
 
-// GERÇEK ONAYLI SMS NUMARA ALMA İSTEĞİ
+// NUMARA SATIN ALMA
 app.post('/api/buyNumber', async (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
@@ -155,7 +155,6 @@ app.post('/api/buyNumber', async (req, res) => {
 
         console.log(`[OnaylıSMS Yanıt]: "${responseText}"`);
 
-        // Başarılı format: ACCESS_NUMBER:ID:NUMARA
         if (responseText.startsWith('ACCESS_NUMBER')) {
             const parts = responseText.split(':');
             const activationId = parts[1];
@@ -165,7 +164,9 @@ app.post('/api/buyNumber', async (req, res) => {
 
             const successOrder = {
                 activationId,
+                productKey: service.id,
                 productName: service.name,
+                price: service.price,
                 phoneNumber,
                 code: "Bekleniyor...",
                 status: 'waiting',
@@ -176,7 +177,6 @@ app.post('/api/buyNumber', async (req, res) => {
             db.orders[activationId] = successOrder;
             return res.json({ success: true, order: successOrder });
         } else {
-            // Sağlayıcıdan gelen hata (Örn: NO_NUMBERS, BAD_KEY, vb.)
             return res.json({ 
                 success: false, 
                 message: `OnaylıSMS Yanıtı: ${responseText}` 
@@ -189,11 +189,38 @@ app.post('/api/buyNumber', async (req, res) => {
     }
 });
 
-// GERÇEK ONAYLI SMS KOD SORGULAMA İSTEĞİ
+// NUMARA İPTAL ETME / DEĞİŞTİRME
+app.post('/api/cancelNumber', async (req, res) => {
+    const { activationId, username } = req.body;
+    const order = db.orders[activationId];
+    const userObj = db.users[username];
+
+    if (!order || !userObj) return res.json({ success: false, message: "Sipariş bulunamadı." });
+    if (order.status !== 'waiting') return res.json({ success: false, message: "Bu sipariş iptal edilemez." });
+
+    try {
+        // Sağlayıcıya iptal / statü değiştirme isteği (status=8: İptal et ve iade al)
+        const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=setStatus&status=8&id=${activationId}`;
+        await axios.get(targetUrl);
+
+        // Kullanıcıya parasını iade et
+        userObj.balance += order.price;
+        order.status = 'cancelled';
+
+        return res.json({ success: true, message: "Numara iptal edildi ve bakiye hesabınıza iade edildi." });
+    } catch (error) {
+        // Sağlayıcı hata verse bile bakiye iadesini kullanıcı mağdur olmasın diye yapabiliriz veya hata dönebiliriz.
+        userObj.balance += order.price;
+        order.status = 'cancelled';
+        return res.json({ success: true, message: "Numara iptal edildi, bakiye iade edildi." });
+    }
+});
+
+// SMS KOD SORGULAMA
 app.get('/api/checkSms/:id', async (req, res) => {
     const activationId = req.params.id;
     const order = db.orders[activationId];
-    if (!order) return res.json({ success: false, message: "Sipariş bulunamadı." });
+    if (!order || order.status !== 'waiting') return res.json({ success: false, message: "Sipariş aktif değil." });
 
     try {
         const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getStatus&id=${activationId}`;
@@ -202,7 +229,6 @@ app.get('/api/checkSms/:id', async (req, res) => {
         if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
         responseText = responseText ? responseText.trim() : '';
 
-        // Başarılı format: STATUS_OK:KOD
         if (responseText.startsWith('STATUS_OK')) {
             const parts = responseText.split(':');
             const code = parts[1];
@@ -304,6 +330,7 @@ app.get('/', (req, res) => {
             let currentUser = localStorage.getItem('currentUser') || null;
             let currentRole = localStorage.getItem('currentRole') || 'user';
             let isRegisterMode = false;
+            let activeTimerInterval = null;
 
             function init() { updateUserArea(); loadServices(); }
 
@@ -387,23 +414,69 @@ app.get('/', (req, res) => {
             }
 
             function trackOrder(id, initialPhone) {
+                if (activeTimerInterval) clearInterval(activeTimerInterval);
+
+                let timeLeft = 600; // 10 Dakika (600 saniye)
+
                 document.getElementById('activeOrderArea').innerHTML = \`
-                    <div class="bg-slate-900 border border-emerald-500 p-6 rounded-2xl shadow-2xl">
-                        <h3 class="font-bold text-emerald-400 text-lg mb-3"><i class="fa-solid fa-circle-check mr-2"></i> Numara Alındı!</h3>
-                        <p class="text-sm text-slate-300">Numara: <strong class="text-white font-mono text-lg">\${initialPhone}</strong></p>
+                    <div class="bg-slate-900 border border-emerald-500 p-6 rounded-2xl shadow-2xl relative">
+                        <h3 class="font-bold text-emerald-400 text-lg mb-3"><i class="fa-solid fa-circle-check mr-2"></i> Numara Başarıyla Alındı</h3>
+                        <p class="text-sm text-slate-300">Numara: <strong class="text-white font-mono text-xl select-all">\${initialPhone}</strong></p>
                         <p class="text-sm text-slate-300 mt-2">SMS Kod: <strong id="smsCode" class="text-emerald-400 font-mono text-xl animate-pulse">Bekleniyor...</strong></p>
+                        <div class="mt-4 flex items-center justify-between border-t border-slate-800 pt-4">
+                            <span class="text-xs text-slate-400">Kod Süresi: <strong id="timerDisplay" class="text-amber-400 font-mono text-sm">10:00</strong></span>
+                            <div id="actionButtons">
+                                <button onclick="cancelOrder('\${id}')" class="bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/40 px-4 py-2 rounded-xl text-xs font-bold transition">Değiştir / İptal Et</button>
+                            </div>
+                        </div>
                     </div>
                 \`;
 
-                const interval = setInterval(async () => {
-                    const res = await fetch(\`/api/checkSms/\${id}\`);
-                    const data = await res.json();
-                    if (data.success && data.status === 'completed') {
-                        document.getElementById('smsCode').innerText = data.code;
-                        clearInterval(interval);
-                        alert("Kod Geldi: " + data.code);
+                activeTimerInterval = setInterval(async () => {
+                    timeLeft--;
+                    let min = Math.floor(timeLeft / 60);
+                    let sec = timeLeft % 60;
+                    const timerEl = document.getElementById('timerDisplay');
+                    if (timerEl) {
+                        timerEl.innerText = \`\${min.toString().padStart(2, '0')}:\${sec.toString().padStart(2, '0')}\`;
                     }
-                }, 4000);
+
+                    // Süre bittiğinde otomatik iptal et
+                    if (timeLeft <= 0) {
+                        clearInterval(activeTimerInterval);
+                        cancelOrder(id, true);
+                        return;
+                    }
+
+                    // SMS Kodunu her 4 saniyede bir kontrol et
+                    try {
+                        const res = await fetch(\`/api/checkSms/\${id}\`);
+                        const data = await res.json();
+                        if (data.success && data.status === 'completed') {
+                            clearInterval(activeTimerInterval);
+                            const codeEl = document.getElementById('smsCode');
+                            if (codeEl) codeEl.innerText = data.code;
+                            const actionArea = document.getElementById('actionButtons');
+                            if (actionArea) actionArea.innerHTML = '<span class="text-emerald-400 font-bold text-xs"><i class="fa-solid fa-check"></i> Tamamlandı</span>';
+                            alert("SMS Kodunuz Geldi: " + data.code);
+                        }
+                    } catch (e) {}
+                }, 1000);
+            }
+
+            async function cancelOrder(id, isTimeout = false) {
+                if (activeTimerInterval) clearInterval(activeTimerInterval);
+                if (!isTimeout && !confirm("Bu numarayı iptal etmek istediğinize emin misiniz? Bakiyeniz hesabınıza iade edilecektir.")) return;
+
+                const res = await fetch('/api/cancelNumber', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ activationId: id, username: currentUser })
+                });
+                const data = await res.json();
+                alert(data.message);
+                fetchBalance();
+                document.getElementById('activeOrderArea').innerHTML = '';
             }
 
             function openAuthModal(mode) {
