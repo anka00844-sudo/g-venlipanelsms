@@ -10,14 +10,13 @@ const TELEGRAM_BOT_TOKEN = '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = '8811977430';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipanel.onrender.com';
 
-const ONAYLI_SMS_API_KEY = 'osms_24a366588a5adf689da78bd656ef845effba51b53754bf57';
+const ONAYLI_SMS_API_KEY = 'osms_454913f52047d05b47a9f3dbb48514e8cee469cf76ef1cf1';
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
 
 let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
-    // Manuel servis listesi (API'den dinamik çekilemediği durumlarda yedek olarak çalışır)
     services: [
         { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "whatsapp", country: "0", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
         { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, serviceCode: "whatsapp", country: "16", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
@@ -131,10 +130,8 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// --- KESİN ÇÖZÜM: GELİŞMİŞ API NUMARA ÇEKME VE TEST ROTASI ---
 app.get('/api/admin/testApi', async (req, res) => {
     try {
-        // Sağlayıcının fiyat/servis listesini çekerek hangi kodların geçerli olduğunu konsola basıyoruz
         const listUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getPrices`;
         const apiResp = await axios.get(listUrl);
         res.json({ success: true, rawApiData: apiResp.data });
@@ -153,8 +150,6 @@ app.post('/api/buyNumber', async (req, res) => {
         return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
     }
 
-    // Sağlayıcının farklı varyasyonlardaki servis kodlarını denemesi için dizi oluşturuyoruz
-    // (Örn: Hem 'whatsapp' hem 'wa' kodlarını sırayla dener)
     const codeVariants = [service.serviceCode];
     if (service.serviceCode === 'whatsapp') codeVariants.push('wa');
     if (service.serviceCode === 'telegram') codeVariants.push('tg');
@@ -190,7 +185,7 @@ app.post('/api/buyNumber', async (req, res) => {
                 };
 
                 db.orders[activationId] = successOrder;
-                break; // Başarılı olursa döngüden çık
+                break;
             }
         } catch (error) {
             console.error("API Bağlantı Hatası:", error.message);
@@ -202,7 +197,7 @@ app.post('/api/buyNumber', async (req, res) => {
     } else {
         return res.json({ 
             success: false, 
-            message: "Sağlayıcı stok vermedi (NO_NUMBERS). Lütfen Render loglarını kontrol edin veya sağlayıcı bakiyenizi/servis kodunuzu doğrulayın." 
+            message: "Yeni API anahtarı ile istek atıldı ancak stok dönmedi (NO_NUMBERS). Lütfen Render loglarını kontrol edin." 
         });
     }
 });
@@ -316,7 +311,6 @@ app.get('/', (req, res) => {
             <main id="mainContent"></main>
         </div>
 
-        <!-- AUTH MODAL -->
         <div id="authModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center hidden z-50">
             <div class="bg-slate-900 border border-emerald-500/40 p-8 rounded-3xl w-full max-w-md relative shadow-2xl">
                 <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
@@ -334,7 +328,6 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <!-- DEPOSIT MODAL -->
         <div id="depositModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center hidden z-50">
             <div class="bg-slate-900 border border-emerald-500/40 p-8 rounded-3xl w-full max-w-md relative shadow-2xl">
                 <button onclick="document.getElementById('depositModal').classList.add('hidden')" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
