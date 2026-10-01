@@ -16,10 +16,10 @@ let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
-    // İstediğin 6 servis tam olarak burada:
+    // İstediğin tam 6 servis ve OnaylıSMS servis/ülke kodları
     services: [
         { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "wa", country: "90", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "wa", country: "63", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "wa", country: "63", icon: "fa-whatsapp", color: "text-emerald-500/10" },
         { id: "tg_us", name: "Telegram Amerika", price: 180.00, serviceCode: "tg", country: "1", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
         { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "tg", country: "90", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
         { id: "goo_tr", name: "Google Türkiye", price: 50.00, serviceCode: "goo", country: "90", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
@@ -135,81 +135,75 @@ app.get('/api/admin/testApi', async (req, res) => {
     }
 });
 
+// GERÇEK ONAYLI SMS NUMARA ALMA İSTEĞİ
 app.post('/api/buyNumber', async (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
     const userObj = db.users[username];
 
-    if (!userObj || !service) return res.json({ success: false, message: "Geçersiz işlem." });
-    if (userObj.balance < service.price) return res.json({ success: false, message: "Yetersiz bakiye!" });
-
-    let activationId = "";
-    let phoneNumber = "";
+    if (!userObj || !service) return res.json({ success: false, message: "Geçersiz işlem veya kullanıcı." });
+    if (userObj.balance < service.price) return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
 
     try {
         const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`;
+        console.log(`[OnaylıSMS İstek]: ${targetUrl}`);
+
         const apiResponse = await axios.get(targetUrl);
         let responseText = apiResponse.data;
         if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
+        responseText = responseText ? responseText.trim() : '';
 
-        if (typeof responseText === 'string' && responseText.includes('ACCESS_NUMBER')) {
+        console.log(`[OnaylıSMS Yanıt]: "${responseText}"`);
+
+        // Başarılı format: ACCESS_NUMBER:ID:NUMARA
+        if (responseText.startsWith('ACCESS_NUMBER')) {
             const parts = responseText.split(':');
-            activationId = parts[1];
-            phoneNumber = parts.slice(2).join(':');
+            const activationId = parts[1];
+            const phoneNumber = parts.slice(2).join(':');
+
+            userObj.balance -= service.price;
+
+            const successOrder = {
+                activationId,
+                productName: service.name,
+                phoneNumber,
+                code: "Bekleniyor...",
+                status: 'waiting',
+                username,
+                time: new Date().toLocaleString('tr-TR')
+            };
+
+            db.orders[activationId] = successOrder;
+            return res.json({ success: true, order: successOrder });
         } else {
-            // Sağlayıcıda stok yok hatası alınırsa testin aksamaması ve panelin çökmemesi için otomatik aktif numara üretilir
-            activationId = 'sim_' + Date.now();
-            phoneNumber = service.country === '90' ? '905554443322' : (service.country === '63' ? '639123456789' : '12025550143');
+            // Sağlayıcıdan gelen hata (Örn: NO_NUMBERS, BAD_KEY, vb.)
+            return res.json({ 
+                success: false, 
+                message: `OnaylıSMS Yanıtı: ${responseText}` 
+            });
         }
 
-        userObj.balance -= service.price;
-        const successOrder = {
-            activationId,
-            productName: service.name,
-            phoneNumber,
-            code: "Bekleniyor...",
-            status: 'waiting',
-            username,
-            time: new Date().toLocaleString('tr-TR')
-        };
-
-        db.orders[activationId] = successOrder;
-        return res.json({ success: true, order: successOrder });
-
     } catch (error) {
-        // Hata durumunda da sistemin takılıp kalmaması ve test edilebilmesi sağlanır
-        activationId = 'sim_' + Date.now();
-        phoneNumber = '905331112233';
-        userObj.balance -= service.price;
-        const successOrder = {
-            activationId,
-            productName: service.name,
-            phoneNumber,
-            code: "Bekleniyor...",
-            status: 'waiting',
-            username,
-            time: new Date().toLocaleString('tr-TR')
-        };
-        db.orders[activationId] = successOrder;
-        return res.json({ success: true, order: successOrder });
+        console.error("API Bağlantı Hatası:", error.message);
+        return res.json({ success: false, message: "Sağlayıcı bağlantı hatası: " + error.message });
     }
 });
 
+// GERÇEK ONAYLI SMS KOD SORGULAMA İSTEĞİ
 app.get('/api/checkSms/:id', async (req, res) => {
     const activationId = req.params.id;
     const order = db.orders[activationId];
     if (!order) return res.json({ success: false, message: "Sipariş bulunamadı." });
 
-    if (activationId.startsWith('sim_')) {
-        return res.json({ success: true, status: 'waiting', code: "Bekleniyor...", phoneNumber: order.phoneNumber });
-    }
-
     try {
-        const apiResponse = await axios.get(`${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getStatus&id=${activationId}`);
+        const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getStatus&id=${activationId}`;
+        const apiResponse = await axios.get(targetUrl);
         let responseText = apiResponse.data;
         if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
+        responseText = responseText ? responseText.trim() : '';
 
-        if (typeof responseText === 'string' && responseText.includes('STATUS_OK')) {
+        // Başarılı format: STATUS_OK:KOD
+        if (responseText.startsWith('STATUS_OK')) {
             const parts = responseText.split(':');
             const code = parts[1];
             order.code = code;
