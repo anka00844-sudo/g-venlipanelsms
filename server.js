@@ -5,7 +5,7 @@ const axios = require('axios');
 const app = express();
 app.use(bodyParser.json());
 
-// Telegram Bot Bilgileri
+// Telegram Bot Bilgilerin
 const TELEGRAM_BOT_TOKEN = '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = '8811977430';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipanel.onrender.com';
@@ -13,7 +13,7 @@ const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipane
 // Bellek Veritabanı
 let db = {
     users: {
-        "admin": { username: "admin", password: "123", balance: 5000, role: "admin" }
+        "admin": { username: "admin", password: "123", balance: 5000, role: "admin", chatId: "8811977430" }
     },
     services: [
         { id: "whatsapp", name: "WhatsApp Onay", price: 25.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
@@ -37,7 +37,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// --- API ROTALARI ---
+// --- API ROTALARI (WEB PANEL İÇİN) ---
 
 app.get('/api/getServices', (req, res) => {
     res.json({ success: true, services: db.services });
@@ -72,7 +72,6 @@ app.post('/api/auth/register', (req, res) => {
     res.json({ success: true, username, role: "user" });
 });
 
-// Ödeme Bildirimi & Telegram Butonlu Bildirim
 app.post('/api/deposit/notify', async (req, res) => {
     const { username, senderName, amount } = req.body;
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
@@ -100,7 +99,6 @@ app.post('/api/deposit/notify', async (req, res) => {
     res.json({ success: true, message: "Ödeme bildiriminiz alındı. İnceleniyor." });
 });
 
-// Admin İstatistikleri
 app.get('/api/admin/getStats', (req, res) => {
     const { adminUsername } = req.query;
     if (db.users[adminUsername] && db.users[adminUsername].role === 'admin') {
@@ -142,19 +140,6 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-app.post('/api/admin/directDeposit', (req, res) => {
-    const { adminUsername, targetUsername, amount } = req.body;
-    if (!db.users[adminUsername] || db.users[adminUsername].role !== 'admin') {
-        return res.json({ success: false, message: "Yetkisiz." });
-    }
-    if (!db.users[targetUsername]) {
-        return res.json({ success: false, message: "Kullanıcı bulunamadı." });
-    }
-    db.users[targetUsername].balance += parseFloat(amount);
-    res.json({ success: true, message: "Bakiye eklendi." });
-});
-
-// Numara Satın Al Simülasyonu
 app.post('/api/buyNumber', (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
@@ -198,10 +183,14 @@ app.get('/api/checkSms/:id', (req, res) => {
     res.json({ success: true, status: order.status, code: order.code });
 });
 
-// Telegram Webhook Yönetimi
+
+// --- TELEGRAM BOT WEBHOOK (TELEGRAM ÜZERİNDEN GELEN MESAJLAR VE BUTONLAR) ---
+
 const webhookPath = `/api/telegram-webhook-${TELEGRAM_BOT_TOKEN}`;
 app.post(webhookPath, async (req, res) => {
     const update = req.body;
+
+    // 1. Buton Tıklamaları (Ödeme Onay / Red)
     if (update.callback_query) {
         const data = update.callback_query.data;
         const chatId = update.callback_query.message.chat.id;
@@ -227,10 +216,31 @@ app.post(webhookPath, async (req, res) => {
             }
         }
     }
+
+    // 2. Kullanıcı Komutları (/start vb.)
+    if (update.message && update.message.text) {
+        const chatId = update.message.chat.id;
+        const text = update.message.text.trim();
+
+        if (text === '/start') {
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: `🤖 SMS Onay Botuna Hoş Geldiniz!\n\nHizmetlerimizden yararlanmak ve numara almak için web sitemizi ziyaret edebilir, bakiye durumunuzu kontrol edebilirsiniz.`,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "🌐 Web Paneline Git", url: RENDER_EXTERNAL_URL }],
+                        [{ text: "💰 Fiyat Listesi", callback_data: "menu_prices" }]
+                    ]
+                }
+            });
+        }
+    }
+
     res.sendStatus(200);
 });
 
-// --- ARAYÜZ (FRONTEND) - TEK DOSYA İÇİNDE ---
+
+// --- WEB PANEL ARAYÜZÜ (FRONTEND) ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -244,24 +254,17 @@ app.get('/', (req, res) => {
     </head>
     <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between">
         <div class="max-w-4xl mx-auto w-full p-4">
-            <!-- ÜST MENÜ -->
             <header class="flex justify-between items-center py-4 border-b border-slate-800 mb-6">
                 <div class="flex items-center gap-2">
                     <i class="fa-solid fa-shield-halved text-indigo-500 text-2xl"></i>
                     <h1 class="text-xl font-bold tracking-wider">SMS ONAY</h1>
                 </div>
-                <div id="userArea" class="flex items-center gap-4">
-                    <!-- Giriş Yap / Kayıt Ol Butonları veya Kullanıcı Bilgisi -->
-                </div>
+                <div id="userArea" class="flex items-center gap-4"></div>
             </header>
-
-            <!-- İÇERİK ALANI -->
-            <main id="mainContent">
-                <!-- Servisler ve İşlem Paneli Buraya Yüklenecek -->
-            </main>
+            <main id="mainContent"></main>
         </div>
 
-        <!-- MODAL / GİRİŞ PENCERESİ -->
+        <!-- AUTH MODAL -->
         <div id="authModal" class="fixed inset-0 bg-black/70 flex items-center justify-center hidden z-50">
             <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md relative">
                 <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
@@ -275,7 +278,7 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <!-- BAKIYE YÜKLEME MODALI -->
+        <!-- DEPOSIT MODAL -->
         <div id="depositModal" class="fixed inset-0 bg-black/70 flex items-center justify-center hidden z-50">
             <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md relative">
                 <button onclick="document.getElementById('depositModal').classList.add('hidden')" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
@@ -284,8 +287,6 @@ app.get('/', (req, res) => {
                     <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
                         <p class="text-slate-500">Banka IBAN:</p>
                         <p class="font-mono text-white font-bold">TR33 0006 1005 9999 9999 9999 99</p>
-                        <p class="text-slate-500 mt-2">Alıcı:</p>
-                        <p class="font-bold text-white">SMS Onay Sistemleri A.Ş.</p>
                     </div>
                     <input type="text" id="depositSender" placeholder="Gönderen Ad Soyad" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none">
                     <input type="number" id="depositAmount" placeholder="Yatırılacak Tutar (TL)" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none">
@@ -294,7 +295,6 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <!-- SCRIPT -->
         <script>
             let currentUser = localStorage.getItem('currentUser') || null;
             let currentRole = localStorage.getItem('currentRole') || 'user';
@@ -343,9 +343,7 @@ app.get('/', (req, res) => {
                 if (!currentUser) return;
 
                 const main = document.getElementById('mainContent');
-                let html = \`
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                \`;
+                let html = \`<div class="grid grid-cols-1 md:grid-cols-2 gap-4">\`;
                 data.services.forEach(s => {
                     html += \`
                         <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
@@ -362,12 +360,9 @@ app.get('/', (req, res) => {
                         </div>
                     \`;
                 });
-                html += \`</div>
-                    <div class="mt-6 flex justify-end">
-                        <button onclick="document.getElementById('depositModal').classList.remove('hidden')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm transition"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button>
-                    </div>
-                    <div id="activeOrderArea" class="mt-8"></div>
-                \`;
+                html += \`</div><div class="mt-6 flex justify-end">
+                    <button onclick="document.getElementById('depositModal').classList.remove('hidden')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm transition"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button>
+                </div><div id="activeOrderArea" class="mt-8"></div>\`;
                 main.innerHTML = html;
             }
 
@@ -375,7 +370,7 @@ app.get('/', (req, res) => {
                 document.getElementById('mainContent').innerHTML = \`
                     <div class="text-center py-20">
                         <h2 class="text-3xl font-extrabold mb-4">Güvenli ve Hızlı SMS Onay Hizmeti</h2>
-                        <p class="text-slate-400 max-w-md mx-auto mb-6">Tüm platformlar için anında sanal numara satın alın, kodlarınızı saniyeler içinde görüntüleyin.</p>
+                        <p class="text-slate-400 max-w-md mx-auto mb-6">Tüm platformlar için anında sanal numara satın alın.</p>
                         <button onclick="openAuthModal('login')" class="bg-indigo-600 hover:bg-indigo-500 px-6 py-3 rounded-xl font-bold transition">Hemen Başla</button>
                     </div>
                 \`;
@@ -405,7 +400,6 @@ app.get('/', (req, res) => {
                         <p class="text-sm text-slate-300 mt-1">Gelen Kod: <strong id="smsCode" class="text-emerald-400 font-mono text-xl">Bekleniyor...</strong></p>
                     </div>
                 \`;
-
                 const interval = setInterval(async () => {
                     const res = await fetch(\`/api/checkSms/\${id}\`);
                     const data = await res.json();
@@ -427,19 +421,13 @@ app.get('/', (req, res) => {
                 document.getElementById('authModal').classList.remove('hidden');
             }
 
-            function closeAuthModal() {
-                document.getElementById('authModal').classList.add('hidden');
-            }
-
-            function switchAuthMode(mode) {
-                openAuthModal(mode);
-            }
+            function closeAuthModal() { document.getElementById('authModal').classList.add('hidden'); }
+            function switchAuthMode(mode) { openAuthModal(mode); }
 
             async function handleAuthSubmit() {
                 const username = document.getElementById('authUsername').value;
                 const password = document.getElementById('authPassword').value;
                 const endpoint = activeAuthMode === 'login' ? '/api/auth/login' : '/api/auth/register';
-
                 const res = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -473,22 +461,15 @@ app.get('/', (req, res) => {
 
             async function openAdminPanel() {
                 const main = document.getElementById('mainContent');
-                const statsRes = await fetch(\`/api/admin/getStats?adminUsername=\${currentUser}\`);
-                const statsData = await statsRes.json();
-
                 const payRes = await fetch(\`/api/admin/getPendingPayments?adminUsername=\${currentUser}\`);
                 const payData = await payRes.json();
-
                 let paymentsHtml = '';
                 for (let id in payData.payments) {
                     let p = payData.payments[id];
                     if (p.status === 'pending') {
                         paymentsHtml += \`
                             <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex justify-between items-center mb-2">
-                                <div>
-                                    <p class="font-bold">\${p.username} - \${p.amount} TL</p>
-                                    <p class="text-xs text-slate-400">Gönderen: \${p.senderName}</p>
-                                </div>
+                                <div><p class="font-bold">\${p.username} - \${p.amount} TL</p><p class="text-xs text-slate-400">Gönderen: \${p.senderName}</p></div>
                                 <div class="space-x-2">
                                     <button onclick="processPayment('\${p.id}', 'approve')" class="bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded-lg text-xs font-bold">Onayla</button>
                                     <button onclick="processPayment('\${p.id}', 'reject')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-lg text-xs font-bold">Reddet</button>
@@ -497,7 +478,6 @@ app.get('/', (req, res) => {
                         \`;
                     }
                 }
-
                 main.innerHTML = \`
                     <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl mb-6">
                         <div class="flex justify-between items-center mb-4">
@@ -537,7 +517,7 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, async () => {
-    console.log(`Sıfırdan kurulan sistem ${PORT} portunda çalışıyor.`);
+    console.log(`Sistem ${PORT} portunda çalışıyor.`);
     try {
         const webhookUrl = `${RENDER_EXTERNAL_URL}${webhookPath}`;
         await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`);
