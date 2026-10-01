@@ -5,24 +5,27 @@ const axios = require('axios');
 const app = express();
 app.use(bodyParser.json());
 
-// Telegram Bot Bilgileri
+// Telegram ve OnaylıSMS Bilgileri
 const TELEGRAM_BOT_TOKEN = '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = '8811977430';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipanel.onrender.com';
 
-// Veritabanı
+const ONAYLI_SMS_API_KEY = 'osms_24a366588a5adf689da78bd656ef845effba51b53754bf57';
+const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
+
+// Veritabanı ve Hizmetler (Belirttiğin Fiyatlar)
 let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
     services: [
-        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "tg_us", name: "Telegram Amerika", price: 150.00, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "gg_tr", name: "Google Türkiye", price: 50.00, icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
-        { id: "dc_tr", name: "Discord Türkiye", price: 50.00, icon: "fa-discord", color: "text-indigo-400", bg: "bg-indigo-500/10" }
+        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "whatsapp", country: "tr", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, serviceCode: "whatsapp", country: "uk", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "whatsapp", country: "ph", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "telegram", country: "tr", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "tg_us", name: "Telegram Amerika", price: 150.00, serviceCode: "telegram", country: "us", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "gg_tr", name: "Google Türkiye", price: 50.00, serviceCode: "google", country: "tr", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+        { id: "dc_tr", name: "Discord Türkiye", price: 50.00, serviceCode: "discord", country: "tr", icon: "fa-discord", color: "text-indigo-400", bg: "bg-indigo-500/10" }
     ],
     payments: {},
     visitors: [],
@@ -75,6 +78,7 @@ app.post('/api/auth/register', (req, res) => {
     res.json({ success: true, username, role: "user" });
 });
 
+// Ödeme Bildirimi
 app.post('/api/deposit/notify', async (req, res) => {
     const { username, senderName, amount } = req.body;
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
@@ -102,20 +106,12 @@ app.post('/api/deposit/notify', async (req, res) => {
     res.json({ success: true, message: "Ödeme bildiriminiz alındı. İnceleniyor." });
 });
 
-// Admin İstatistikleri ve Detaylar
 app.get('/api/admin/getData', (req, res) => {
     const { adminUsername } = req.query;
     if (!db.users[adminUsername] || db.users[adminUsername].role !== 'admin') {
         return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
     }
-    res.json({
-        success: true,
-        visitors: db.visitors,
-        logins: db.logins,
-        users: db.users,
-        payments: db.payments,
-        orders: db.orders
-    });
+    res.json({ success: true, visitors: db.visitors, logins: db.logins, users: db.users, payments: db.payments, orders: db.orders });
 });
 
 app.post('/api/admin/processPayment', (req, res) => {
@@ -141,52 +137,80 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// Numara Satın Al (Stok Sorunsuz Simülasyon)
-app.post('/api/buyNumber', (req, res) => {
+// --- ONAYLI SMS API ENTEGRASYONU (GERÇEK NUMARA & SMS ÇEKME) ---
+app.post('/api/buyNumber', async (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
     const userObj = db.users[username];
 
     if (!userObj || !service) return res.json({ success: false, message: "Geçersiz işlem." });
     if (userObj.balance < service.price) {
-        return res.json({ success: false, code: 'LOW_BALANCE', message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
+        return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
     }
 
-    userObj.balance -= service.price;
-    const activationId = 'act_' + Date.now();
-    const randomPhone = '905' + Math.floor(10000000 + Math.random() * 90000000);
-    const randomCode = Math.floor(1000 + Math.random() * 9000).toString();
+    try {
+        // OnaylıSMS API'den Numara Talep Et
+        const apiResponse = await axios.get(`${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getNumber&service=${service.serviceCode}&country=${service.country}`);
+        
+        let responseText = apiResponse.data;
+        // API yanıtı genellikle "ACCESS_NUMBER:activationId:phoneNumber" şeklindedir.
+        if (typeof responseText === 'string' && responseText.includes('ACCESS_NUMBER')) {
+            const parts = responseText.split(':');
+            const activationId = parts[1];
+            const phoneNumber = parts[2];
 
-    const order = {
-        activationId,
-        productName: service.name,
-        phoneNumber: randomPhone,
-        code: "Bekleniyor...",
-        realCode: randomCode,
-        status: 'waiting',
-        username,
-        time: new Date().toLocaleString('tr-TR')
-    };
+            userObj.balance -= service.price;
 
-    db.orders[activationId] = order;
+            const order = {
+                activationId,
+                productName: service.name,
+                phoneNumber,
+                code: "Bekleniyor...",
+                status: 'waiting',
+                username,
+                time: new Date().toLocaleString('tr-TR')
+            };
 
-    setTimeout(() => {
-        if (db.orders[activationId]) {
-            db.orders[activationId].code = randomCode;
-            db.orders[activationId].status = 'completed';
+            db.orders[activationId] = order;
+            return res.json({ success: true, order });
+        } else {
+            return res.json({ success: false, message: "Şu an bu serviste stok bulunamadı: " + responseText });
         }
-    }, 8000);
-
-    res.json({ success: true, order });
+    } catch (error) {
+        console.error("OnaylıSMS API Hatası:", error.message);
+        return res.json({ success: false, message: "Numara Sağlayıcı API Bağlantı Hatası." });
+    }
 });
 
-app.get('/api/checkSms/:id', (req, res) => {
-    const order = db.orders[req.params.id];
+// SMS Kodunu Kontrol Et (OnaylıSMS API Sorgusu)
+app.get('/api/checkSms/:id', async (req, res) => {
+    const activationId = req.params.id;
+    const order = db.orders[activationId];
     if (!order) return res.json({ success: false, message: "Sipariş bulunamadı." });
-    res.json({ success: true, status: order.status, code: order.code, phoneNumber: order.phoneNumber });
+
+    if (order.status === 'completed') {
+        return res.json({ success: true, status: 'completed', code: order.code, phoneNumber: order.phoneNumber });
+    }
+
+    try {
+        const apiResponse = await axios.get(`${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getStatus&id=${activationId}`);
+        const responseText = apiResponse.data;
+
+        if (typeof responseText === 'string' && responseText.includes('STATUS_OK')) {
+            const code = responseText.split(':')[1];
+            order.code = code;
+            order.status = 'completed';
+            return res.json({ success: true, status: 'completed', code, phoneNumber: order.phoneNumber });
+        } else {
+            return res.json({ success: true, status: 'waiting', code: "Bekleniyor...", phoneNumber: order.phoneNumber });
+        }
+    } catch (error) {
+        console.error("SMS Durum Sorgu Hatası:", error.message);
+        return res.json({ success: true, status: 'waiting', code: "Bekleniyor...", phoneNumber: order.phoneNumber });
+    }
 });
 
-// --- TELEGRAM BOT WEBHOOK (KOMUTLAR VE BUTONLAR) ---
+// --- TELEGRAM BOT WEBHOOK ---
 const webhookPath = `/api/telegram-webhook-${TELEGRAM_BOT_TOKEN}`;
 app.post(webhookPath, async (req, res) => {
     const update = req.body;
@@ -194,7 +218,6 @@ app.post(webhookPath, async (req, res) => {
     if (update.callback_query) {
         const callbackData = update.callback_query.data;
         const chatId = update.callback_query.message.chat.id;
-        const messageId = update.callback_query.message.message_id;
 
         if (callbackData.startsWith('approve_') || callbackData.startsWith('reject_')) {
             const [action, paymentId] = callbackData.split('_');
@@ -251,7 +274,7 @@ app.post(webhookPath, async (req, res) => {
     res.sendStatus(200);
 });
 
-// --- WEB ARAYÜZÜ (FRONTEND) ---
+// --- WEB ARAYÜZÜ (MATRIX ARKA PLAN + IBAN RESUL SAKAL) ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -262,13 +285,17 @@ app.get('/', (req, res) => {
         <title>SMS Onay Paneli</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <style>
+            canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+        </style>
     </head>
-    <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between">
-        <div class="max-w-5xl mx-auto w-full p-4">
-            <header class="flex justify-between items-center py-4 border-b border-slate-800 mb-6">
+    <body class="bg-slate-950/80 text-slate-100 font-sans min-h-screen flex flex-col justify-between relative">
+        <canvas id="matrixCanvas"></canvas>
+        <div class="max-w-5xl mx-auto w-full p-4 relative z-10">
+            <header class="flex justify-between items-center py-4 border-b border-slate-800 mb-6 bg-slate-950/60 backdrop-blur px-4 rounded-2xl">
                 <div class="flex items-center gap-2">
-                    <i class="fa-solid fa-shield-halved text-indigo-500 text-2xl"></i>
-                    <h1 class="text-xl font-bold tracking-wider">SMS ONAY</h1>
+                    <i class="fa-solid fa-shield-halved text-emerald-500 text-2xl"></i>
+                    <h1 class="text-xl font-bold tracking-wider text-emerald-400">SMS ONAY</h1>
                 </div>
                 <div id="userArea" class="flex items-center gap-4"></div>
             </header>
@@ -276,28 +303,30 @@ app.get('/', (req, res) => {
         </div>
 
         <!-- AUTH MODAL -->
-        <div id="authModal" class="fixed inset-0 bg-black/70 flex items-center justify-center hidden z-50">
-            <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md relative">
+        <div id="authModal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50">
+            <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md relative shadow-2xl">
                 <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
                 <h2 id="authTitle" class="text-xl font-bold mb-4">Giriş Yap</h2>
                 <div class="space-y-4">
-                    <input type="text" id="authUsername" placeholder="Kullanıcı Adı" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500">
-                    <input type="password" id="authPassword" placeholder="Şifre" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500">
-                    <button onclick="handleAuthSubmit()" id="authSubmitBtn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-xl transition">Giriş Yap</button>
-                    <p id="authSwitchText" class="text-center text-sm text-slate-400">Hesabın yok mu? <span onclick="switchAuthMode('register')" class="text-indigo-400 cursor-pointer underline">Kayıt Ol</span></p>
+                    <input type="text" id="authUsername" placeholder="Kullanıcı Adı" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-emerald-500">
+                    <input type="password" id="authPassword" placeholder="Şifre" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-emerald-500">
+                    <button onclick="handleAuthSubmit()" id="authSubmitBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 rounded-xl transition">Giriş Yap</button>
+                    <p id="authSwitchText" class="text-center text-sm text-slate-400">Hesabın yok mu? <span onclick="switchAuthMode('register')" class="text-emerald-400 cursor-pointer underline">Kayıt Ol</span></p>
                 </div>
             </div>
         </div>
 
-        <!-- DEPOSIT MODAL -->
-        <div id="depositModal" class="fixed inset-0 bg-black/70 flex items-center justify-center hidden z-50">
-            <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md relative">
+        <!-- DEPOSIT MODAL (RESUL SAKAL IBAN) -->
+        <div id="depositModal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50">
+            <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md relative shadow-2xl">
                 <button onclick="document.getElementById('depositModal').classList.add('hidden')" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
-                <h2 class="text-xl font-bold mb-4">Bakiye Yükle (IBAN / Havale)</h2>
+                <h2 class="text-xl font-bold mb-4 text-emerald-400">Bakiye Yükle (IBAN / Havale)</h2>
                 <div class="space-y-4 text-sm text-slate-300">
-                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                    <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
                         <p class="text-slate-500">Banka IBAN:</p>
-                        <p class="font-mono text-white font-bold">TR33 0006 1005 9999 9999 9999 99</p>
+                        <p class="font-mono text-emerald-400 font-bold text-base">TR62 0006 2000 5000 0006 8107 73</p>
+                        <p class="text-slate-500 mt-2">Alıcı Ad Soyadı:</p>
+                        <p class="font-bold text-white">Resul Sakal</p>
                     </div>
                     <input type="text" id="depositSender" placeholder="Gönderen Ad Soyad" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none">
                     <input type="number" id="depositAmount" placeholder="Yatırılacak Tutar (TL)" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none">
@@ -307,6 +336,36 @@ app.get('/', (req, res) => {
         </div>
 
         <script>
+            // Matrix Efekti Arka Plan
+            const canvas = document.getElementById('matrixCanvas');
+            const ctx = canvas.getContext('2d');
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            const letters = '01ABCDEFXYZ';
+            const fontSize = 14;
+            let columns = canvas.width / fontSize;
+            let drops = [];
+            for (let x = 0; x < columns; x++) drops[x] = 1;
+
+            function drawMatrix() {
+                ctx.fillStyle = 'rgba(2, 6, 23, 0.1)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#10b981';
+                ctx.font = fontSize + 'px monospace';
+                for (let i = 0; i < drops.length; i++) {
+                    let text = letters.charAt(Math.floor(Math.random() * letters.length));
+                    ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+                    if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+                    drops[i]++;
+                }
+            }
+            setInterval(drawMatrix, 33);
+
             let currentUser = localStorage.getItem('currentUser') || null;
             let currentRole = localStorage.getItem('currentRole') || 'user';
             let activeAuthMode = 'login';
@@ -322,7 +381,7 @@ app.get('/', (req, res) => {
                     area.innerHTML = \`
                         <div class="flex items-center gap-3">
                             <span class="text-sm">@<strong class="text-white">\${currentUser}</strong></span>
-                            <span id="userBalance" class="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full text-xs font-bold border border-indigo-500/20">0.00 TL</span>
+                            <span id="userBalance" class="bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold border border-emerald-500/20">0.00 TL</span>
                             \${currentUser === 'Aklomanti' ? '<button onclick="openAdminPanel()" class="bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded-lg text-xs font-bold transition">Admin Panel</button>' : ''}
                             <button onclick="logout()" class="text-red-400 hover:text-red-300 text-sm"><i class="fa-solid fa-right-from-bracket"></i></button>
                         </div>
@@ -330,7 +389,7 @@ app.get('/', (req, res) => {
                     fetchBalance();
                 } else {
                     area.innerHTML = \`
-                        <button onclick="openAuthModal('login')" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-xl text-sm font-semibold transition">Giriş Yap</button>
+                        <button onclick="openAuthModal('login')" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl text-sm font-semibold transition">Giriş Yap</button>
                         <button onclick="openAuthModal('register')" class="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl text-sm font-semibold transition">Kayıt Ol</button>
                     \`;
                     renderHomeNotLogged();
@@ -357,32 +416,32 @@ app.get('/', (req, res) => {
                 let html = \`<div class="grid grid-cols-1 md:grid-cols-2 gap-4">\`;
                 data.services.forEach(s => {
                     html += \`
-                        <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+                        <div class="bg-slate-900/90 backdrop-blur border border-slate-800 p-5 rounded-2xl flex items-center justify-between shadow-lg">
                             <div class="flex items-center gap-4">
                                 <div class="\${s.bg} \${s.color} w-12 h-12 rounded-xl flex items-center justify-center text-xl">
                                     <i class="fa-brands \${s.icon}"></i>
                                 </div>
                                 <div>
                                     <h3 class="font-bold text-lg">\${s.name}</h3>
-                                    <p class="text-indigo-400 font-semibold">\${s.price.toFixed(2)} TL</p>
+                                    <p class="text-emerald-400 font-semibold">\${s.price.toFixed(2)} TL</p>
                                 </div>
                             </div>
-                            <button onclick="buyNumber('\${s.id}')" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-xl text-sm font-bold transition">Numara Al</button>
+                            <button onclick="buyNumber('\${s.id}')" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl text-sm font-bold transition shadow">Numara Al</button>
                         </div>
                     \`;
                 });
                 html += \`</div><div class="mt-6 flex justify-end">
-                    <button onclick="document.getElementById('depositModal').classList.remove('hidden')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm transition"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button>
+                    <button onclick="document.getElementById('depositModal').classList.remove('hidden')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm transition shadow"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button>
                 </div><div id="activeOrderArea" class="mt-8"></div>\`;
                 main.innerHTML = html;
             }
 
             function renderHomeNotLogged() {
                 document.getElementById('mainContent').innerHTML = \`
-                    <div class="text-center py-20">
-                        <h2 class="text-3xl font-extrabold mb-4">Güvenli ve Hızlı SMS Onay Hizmeti</h2>
-                        <p class="text-slate-400 max-w-md mx-auto mb-6">Tüm platformlar için anında sanal numara satın alın.</p>
-                        <button onclick="openAuthModal('login')" class="bg-indigo-600 hover:bg-indigo-500 px-6 py-3 rounded-xl font-bold transition">Hemen Başla</button>
+                    <div class="text-center py-20 bg-slate-900/60 backdrop-blur rounded-3xl border border-slate-800 p-8 shadow-2xl">
+                        <h2 class="text-3xl font-extrabold mb-4 text-emerald-400">Güvenli ve Hızlı SMS Onay Hizmeti</h2>
+                        <p class="text-slate-400 max-w-md mx-auto mb-6">Tüm platformlar için anında onaylı sanal numara satın alın, kodlarınızı saniyeler içinde görüntüleyin.</p>
+                        <button onclick="openAuthModal('login')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold transition shadow">Hemen Başla</button>
                     </div>
                 \`;
             }
@@ -405,8 +464,8 @@ app.get('/', (req, res) => {
             function trackOrder(id) {
                 const area = document.getElementById('activeOrderArea');
                 area.innerHTML = \`
-                    <div class="bg-slate-900 border border-amber-500/30 p-6 rounded-2xl">
-                        <h3 class="font-bold text-amber-400 mb-2"><i class="fa-solid fa-spinner fa-spin mr-2"></i> SMS Bekleniyor...</h3>
+                    <div class="bg-slate-900/90 backdrop-blur border border-emerald-500/40 p-6 rounded-2xl shadow-xl">
+                        <h3 class="font-bold text-emerald-400 mb-2"><i class="fa-solid fa-spinner fa-spin mr-2"></i> SMS Bekleniyor (OnaylıSMS Bağlı)...</h3>
                         <p class="text-sm text-slate-300">Numara: <strong id="phoneNum" class="text-white font-mono text-lg">Yükleniyor...</strong></p>
                         <p class="text-sm text-slate-300 mt-1">Gelen Kod: <strong id="smsCode" class="text-emerald-400 font-mono text-xl">Bekleniyor...</strong></p>
                     </div>
@@ -415,11 +474,11 @@ app.get('/', (req, res) => {
                     const res = await fetch(\`/api/checkSms/\${id}\`);
                     const data = await res.json();
                     if (data.success) {
-                        document.getElementById('phoneNum').innerText = data.phoneNumber || '905XXXXXXXXX';
+                        if (data.phoneNumber) document.getElementById('phoneNum').innerText = data.phoneNumber;
                         if (data.status === 'completed') {
                             document.getElementById('smsCode').innerText = data.code;
                             clearInterval(interval);
-                            alert("SMS Kodu Geldi: " + data.code);
+                            alert("SMS Kodu Başarıyla Geldi: " + data.code);
                         }
                     }
                 }, 3000);
@@ -499,7 +558,7 @@ app.get('/', (req, res) => {
                 let loginsHtml = data.logins.map(l => \`<li class="text-xs text-slate-400">@\${l.username} (\${l.ip}) - \${l.time}</li>\`).join('');
 
                 main.innerHTML = \`
-                    <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl mb-6">
+                    <div class="bg-slate-900/90 backdrop-blur border border-slate-800 p-6 rounded-2xl mb-6 shadow-xl">
                         <div class="flex justify-between items-center mb-4">
                             <h2 class="text-xl font-bold text-amber-400"><i class="fa-solid fa-lock mr-2"></i> Admin Paneli (Aklomanti)</h2>
                             <button onclick="loadServices()" class="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl text-xs font-bold">Ana Sayfaya Dön</button>
@@ -509,11 +568,11 @@ app.get('/', (req, res) => {
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                             <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
-                                <h4 class="font-bold text-sm text-indigo-400 mb-2">Son Ziyaretçiler (IP)</h4>
+                                <h4 class="font-bold text-sm text-emerald-400 mb-2">Son Ziyaretçiler (IP)</h4>
                                 <ul class="space-y-1 max-h-40 overflow-y-auto">\${visitorsHtml}</ul>
                             </div>
                             <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
-                                <h4 class="font-bold text-sm text-indigo-400 mb-2">Son Giriş Yapanlar</h4>
+                                <h4 class="font-bold text-sm text-emerald-400 mb-2">Son Giriş Yapanlar</h4>
                                 <ul class="space-y-1 max-h-40 overflow-y-auto">\${loginsHtml}</ul>
                             </div>
                         </div>
