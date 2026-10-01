@@ -1,0 +1,13 @@
+{
+  "name": "sms-panel",
+  "version": "1.0.0",
+  "description": "SMS Onay Paneli",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "express": "^4.19.2"
+  }
+}
