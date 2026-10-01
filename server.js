@@ -84,57 +84,63 @@ function readInfo(info) {
     return { count: isNaN(count) ? 0 : count, cost: isNaN(cost) ? 0 : cost };
 }
 
-// ====== SERVİS LİSTESİ (CANLI) ======
-app.get('/api/getServices', async (req, res) => {
+// ====== SABİT ÜRÜN KATALOĞU (sadece bu 4 ürün satılır) ======
+// country: sağlayıcının ülke ID'si. Türkiye=62, Filipinler=4, ABD=187
+const CATALOG = [
+    { id: 'wa_62',  name: 'WhatsApp Türkiye',   serviceCode: 'wa', country: '62',  price: 300 },
+    { id: 'tg_62',  name: 'Telegram Türkiye',   serviceCode: 'tg', country: '62',  price: 200 },
+    { id: 'wa_4',   name: 'WhatsApp Filipinler', serviceCode: 'wa', country: '4',   price: 200 },
+    { id: 'tg_187', name: 'Telegram ABD',       serviceCode: 'tg', country: '187', price: 200 }
+];
+
+let stockCache = {}; // ülke -> { time, data }
+async function getCountryStatus(country) {
+    const c = stockCache[country];
+    if (c && Date.now() - c.time < 10000) return c.data;
     try {
-        const q = (req.query.q || '').toString().toLowerCase().trim();
-        const data = await getProviderPrices();
-        let list = [];
-
-        for (const countryId in data) {
-            const countryServices = data[countryId];
-            if (!countryServices || typeof countryServices !== 'object') continue;
-
-            for (const serviceCode in countryServices) {
-                if (!/^[a-zA-Z0-9_]+$/.test(serviceCode)) continue;
-                const { count, cost } = readInfo(countryServices[serviceCode]);
-                if (count <= 0 || cost <= 0) continue; // sadece GERÇEKTEN stokta olanlar
-
-                const code = serviceCode.toLowerCase();
-                const meta = SERVICE_INFO[code];
-                const baseName = meta ? meta.name : serviceCode.toUpperCase();
-                const countryName = COUNTRY_NAMES[String(countryId)] || ('Ülke ' + countryId);
-                const fullName = baseName + ' (' + countryName + ')';
-
-                // Arama yoksa sadece popüler servisleri göster, arama varsa hepsinde ara
-                if (q) {
-                    if (!fullName.toLowerCase().includes(q) && !code.includes(q)) continue;
-                } else if (!meta) continue;
-
-                list.push({
-                    id: serviceCode + '_' + countryId,
-                    name: fullName,
-                    price: calcPrice(cost),
-                    serviceCode: serviceCode,
-                    country: String(countryId),
-                    stock: count,
-                    icon: meta ? meta.icon : 'fa-globe',
-                    iconType: meta ? meta.type : 'fa-solid',
-                    color: meta ? meta.color : 'text-emerald-400',
-                    bg: meta ? meta.bg : 'bg-emerald-500/10',
-                    _pop: meta ? POPULAR.indexOf(code) : 99
-                });
-            }
-        }
-
-        list.sort((a, b) => a._pop - b._pop || a.price - b.price);
-        list = list.slice(0, 60).map(({ _pop, ...rest }) => rest);
-
-        res.json({ success: true, services: list });
+        const resp = await axios.get(ONAYLI_SMS_URL, {
+            params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumbersStatus', country: country },
+            timeout: 15000
+        });
+        let d = resp.data;
+        if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
+        stockCache[country] = { time: Date.now(), data: d };
+        return d;
     } catch (e) {
-        console.error('getServices hatası:', e.message);
-        res.json({ success: false, services: [], message: e.message });
+        return null;
     }
+}
+function stockFromStatus(status, code) {
+    if (!status || typeof status !== 'object') return null;
+    for (const k in status) {
+        if (k === code || k.startsWith(code + '_')) {
+            const v = parseInt(status[k]);
+            if (!isNaN(v)) return v;
+        }
+    }
+    return null;
+}
+
+// ====== SERVİS LİSTESİ ======
+app.get('/api/getServices', async (req, res) => {
+    const q = (req.query.q || '').toString().toLowerCase().trim();
+    const list = [];
+    for (const item of CATALOG) {
+        if (q && !item.name.toLowerCase().includes(q)) continue;
+        const meta = SERVICE_INFO[item.serviceCode];
+        const status = await getCountryStatus(item.country);
+        const st = stockFromStatus(status, item.serviceCode);
+        list.push({
+            id: item.id,
+            name: item.name,
+            price: item.price,
+            serviceCode: item.serviceCode,
+            country: item.country,
+            stockText: st === null ? 'Stok: kontrol edilemedi' : (st > 0 ? st + ' Adet Stok' : 'Stok Yok'),
+            icon: meta.icon, iconType: meta.type, color: meta.color, bg: meta.bg
+        });
+    }
+    res.json({ success: true, services: list });
 });
 
 app.get('/api/getCustomerBalance', (req, res) => {
@@ -220,19 +226,25 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// Sağlayıcı bağlantı testi: sağlayıcı bakiyesi + ham fiyat verisinin özeti
+// Sağlayıcı bağlantı testi: sağlayıcı bakiyesi + ülke stok yanıtları
 app.get('/api/admin/testApi', async (req, res) => {
     if (!isAdmin(req.query.adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     try {
         const balResp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 20000 });
-        const data = await getProviderPrices(true);
-        const countries = Object.keys(data);
-        res.json({
-            success: true,
-            providerBalance: balResp.data,
-            countryCount: countries.length,
-            sample: { [countries[0]]: data[countries[0]] }
-        });
+        const out = { success: true, providerBalance: balResp.data, countries: {} };
+        for (const c of ['62', '4', '187']) {
+            try {
+                const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumbersStatus', country: c }, timeout: 20000 });
+                let d = r.data;
+                if (typeof d === 'object') {
+                    const pick = {};
+                    for (const k in d) { if (k.startsWith('wa') || k.startsWith('tg')) pick[k] = d[k]; }
+                    d = Object.keys(pick).length ? pick : 'wa/tg anahtarı yok, toplam anahtar sayısı: ' + Object.keys(d).length;
+                }
+                out.countries[c] = d;
+            } catch (e) { out.countries[c] = 'HATA: ' + e.message; }
+        }
+        res.json(out);
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
@@ -255,23 +267,21 @@ app.post('/api/buyNumber', async (req, res) => {
     const userObj = db.users[username];
     if (!userObj) return res.json({ success: false, message: "Kullanıcı bulunamadı." });
 
+    const item = CATALOG.find(c => c.serviceCode === serviceCode && c.country === String(country));
+    if (!item) return res.json({ success: false, message: "Geçersiz ürün." });
+
+    const price = item.price; // fiyat sunucudan, müşteri değiştiremez
+    if (userObj.balance < price) return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
+
     try {
-        // FİYAT İSTEMCİDEN DEĞİL, SUNUCUDAN ALINIR (müşteri fiyatı değiştiremesin)
-        const prices = await getProviderPrices();
-        const { count, cost } = readInfo(prices[country] && prices[country][serviceCode]);
-        if (count <= 0 || cost <= 0) return res.json({ success: false, message: "Bu servis şu an stokta yok." });
-
-        const price = calcPrice(cost);
-        if (userObj.balance < price) return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
-
         const resp = await axios.get(ONAYLI_SMS_URL, {
-            params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: serviceCode, country: country },
+            params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: item.country },
             timeout: 30000
         });
         let responseText = resp.data;
         if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
         responseText = responseText ? String(responseText).trim() : '';
-        console.log(`[getNumber] service=${serviceCode} country=${country} -> "${responseText}"`);
+        console.log('[getNumber] service=' + item.serviceCode + ' country=' + item.country + ' -> "' + responseText + '"');
 
         if (responseText.startsWith('ACCESS_NUMBER')) {
             const parts = responseText.split(':');
@@ -282,7 +292,7 @@ app.post('/api/buyNumber', async (req, res) => {
 
             const order = {
                 activationId,
-                productName: (SERVICE_INFO[serviceCode.toLowerCase()] || {}).name || serviceCode.toUpperCase(),
+                productName: item.name,
                 price,
                 phoneNumber,
                 code: "Bekleniyor...",
@@ -296,7 +306,6 @@ app.post('/api/buyNumber', async (req, res) => {
 
         const key = responseText.split(':')[0];
         const msg = PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText);
-        pricesCache.time = 0; // stok değişmiş olabilir, listeyi yenile
         return res.json({ success: false, message: msg });
     } catch (error) {
         console.error("API Bağlantı Hatası:", error.message);
@@ -548,7 +557,7 @@ app.get('/', (req, res) => {
                     '<div class="flex items-center gap-4">' +
                     '<div class="' + s.bg + ' ' + s.color + ' w-12 h-12 rounded-xl flex items-center justify-center text-xl border border-emerald-500/20"><i class="' + s.iconType + ' ' + s.icon + '"></i></div>' +
                     '<div><h3 class="font-bold text-sm text-white">' + s.name + '</h3>' +
-                    '<p class="text-emerald-400 font-bold text-sm">' + s.price.toFixed(2) + ' TL <span class="text-xs ml-2 font-mono text-emerald-400">' + s.stock + ' Adet Stok</span></p></div>' +
+                    '<p class="text-emerald-400 font-bold text-sm">' + s.price.toFixed(2) + ' TL <span class="text-xs ml-2 font-mono text-emerald-400">' + s.stockText + '</span></p></div>' +
                     '</div>' +
                     '<button data-code="' + s.serviceCode + '" data-country="' + s.country + '" onclick="buyNumber(this)" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition">Numara Al</button>' +
                     '</div>';
