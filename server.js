@@ -5,21 +5,24 @@ const axios = require('axios');
 const app = express();
 app.use(bodyParser.json());
 
-// Telegram Bot Bilgilerin
+// Telegram Bot Bilgileri
 const TELEGRAM_BOT_TOKEN = '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = '8811977430';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipanel.onrender.com';
 
-// Bellek Veritabanı
+// Veritabanı
 let db = {
     users: {
-        "admin": { username: "admin", password: "123", balance: 5000, role: "admin", chatId: "8811977430" }
+        "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
     services: [
-        { id: "whatsapp", name: "WhatsApp Onay", price: 25.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "telegram", name: "Telegram Onay", price: 20.00, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "instagram", name: "Instagram Onay", price: 30.00, icon: "fa-instagram", color: "text-pink-400", bg: "bg-pink-500/10" },
-        { id: "gmail", name: "Google / Gmail Onay", price: 15.00, icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" }
+        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_uk", name: "WhatsApp İngiltere", price: 200.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "tg_us", name: "Telegram Amerika", price: 150.00, icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "gg_tr", name: "Google Türkiye", price: 50.00, icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+        { id: "dc_tr", name: "Discord Türkiye", price: 50.00, icon: "fa-discord", color: "text-indigo-400", bg: "bg-indigo-500/10" }
     ],
     payments: {},
     visitors: [],
@@ -37,7 +40,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// --- API ROTALARI (WEB PANEL İÇİN) ---
+// --- API ROTALARI ---
 
 app.get('/api/getServices', (req, res) => {
     res.json({ success: true, services: db.services });
@@ -77,7 +80,7 @@ app.post('/api/deposit/notify', async (req, res) => {
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
 
     const paymentId = 'pay_' + Date.now();
-    db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending' };
+    db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR') };
 
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -99,22 +102,20 @@ app.post('/api/deposit/notify', async (req, res) => {
     res.json({ success: true, message: "Ödeme bildiriminiz alındı. İnceleniyor." });
 });
 
-app.get('/api/admin/getStats', (req, res) => {
+// Admin İstatistikleri ve Detaylar
+app.get('/api/admin/getData', (req, res) => {
     const { adminUsername } = req.query;
-    if (db.users[adminUsername] && db.users[adminUsername].role === 'admin') {
-        res.json({ success: true, visitors: db.visitors, logins: db.logins });
-    } else {
-        res.status(403).json({ success: false, message: "Yetkisiz." });
+    if (!db.users[adminUsername] || db.users[adminUsername].role !== 'admin') {
+        return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
     }
-});
-
-app.get('/api/admin/getPendingPayments', (req, res) => {
-    const { adminUsername } = req.query;
-    if (db.users[adminUsername] && db.users[adminUsername].role === 'admin') {
-        res.json({ success: true, payments: db.payments });
-    } else {
-        res.status(403).json({ success: false, message: "Yetkisiz." });
-    }
+    res.json({
+        success: true,
+        visitors: db.visitors,
+        logins: db.logins,
+        users: db.users,
+        payments: db.payments,
+        orders: db.orders
+    });
 });
 
 app.post('/api/admin/processPayment', (req, res) => {
@@ -140,6 +141,7 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
+// Numara Satın Al (Stok Sorunsuz Simülasyon)
 app.post('/api/buyNumber', (req, res) => {
     const { productKey, username } = req.body;
     const service = db.services.find(s => s.id === productKey);
@@ -147,7 +149,7 @@ app.post('/api/buyNumber', (req, res) => {
 
     if (!userObj || !service) return res.json({ success: false, message: "Geçersiz işlem." });
     if (userObj.balance < service.price) {
-        return res.json({ success: false, code: 'LOW_BALANCE', message: "Yetersiz bakiye!" });
+        return res.json({ success: false, code: 'LOW_BALANCE', message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
     }
 
     userObj.balance -= service.price;
@@ -162,7 +164,8 @@ app.post('/api/buyNumber', (req, res) => {
         code: "Bekleniyor...",
         realCode: randomCode,
         status: 'waiting',
-        username
+        username,
+        time: new Date().toLocaleString('tr-TR')
     };
 
     db.orders[activationId] = order;
@@ -172,7 +175,7 @@ app.post('/api/buyNumber', (req, res) => {
             db.orders[activationId].code = randomCode;
             db.orders[activationId].status = 'completed';
         }
-    }, 10000);
+    }, 8000);
 
     res.json({ success: true, order });
 });
@@ -180,44 +183,53 @@ app.post('/api/buyNumber', (req, res) => {
 app.get('/api/checkSms/:id', (req, res) => {
     const order = db.orders[req.params.id];
     if (!order) return res.json({ success: false, message: "Sipariş bulunamadı." });
-    res.json({ success: true, status: order.status, code: order.code });
+    res.json({ success: true, status: order.status, code: order.code, phoneNumber: order.phoneNumber });
 });
 
-
-// --- TELEGRAM BOT WEBHOOK (TELEGRAM ÜZERİNDEN GELEN MESAJLAR VE BUTONLAR) ---
-
+// --- TELEGRAM BOT WEBHOOK (KOMUTLAR VE BUTONLAR) ---
 const webhookPath = `/api/telegram-webhook-${TELEGRAM_BOT_TOKEN}`;
 app.post(webhookPath, async (req, res) => {
     const update = req.body;
 
-    // 1. Buton Tıklamaları (Ödeme Onay / Red)
     if (update.callback_query) {
-        const data = update.callback_query.data;
+        const callbackData = update.callback_query.data;
         const chatId = update.callback_query.message.chat.id;
-        const [action, paymentId] = data.split('_');
+        const messageId = update.callback_query.message.message_id;
 
-        const payment = db.payments[paymentId];
-        if (payment && payment.status === 'pending') {
-            if (action === 'approve') {
-                payment.status = 'approved';
-                if (db.users[payment.username]) {
-                    db.users[payment.username].balance += payment.amount;
+        if (callbackData.startsWith('approve_') || callbackData.startsWith('reject_')) {
+            const [action, paymentId] = callbackData.split('_');
+            const payment = db.payments[paymentId];
+            if (payment && payment.status === 'pending') {
+                if (action === 'approve') {
+                    payment.status = 'approved';
+                    if (db.users[payment.username]) {
+                        db.users[payment.username].balance += payment.amount;
+                    }
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                        chat_id: chatId,
+                        text: `✅ Ödeme Onaylandı!\nKullanıcı: ${payment.username}\nTutar: ${payment.amount} TL`
+                    });
+                } else {
+                    payment.status = 'rejected';
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                        chat_id: chatId,
+                        text: `❌ Ödeme Reddedildi!\nKullanıcı: ${payment.username}`
+                    });
                 }
-                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: `✅ Ödeme Onaylandı!\nKullanıcı: ${payment.username}\nTutar: ${payment.amount} TL`
-                });
-            } else if (action === 'reject') {
-                payment.status = 'rejected';
-                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: `❌ Ödeme Reddedildi!\nKullanıcı: ${payment.username}`
-                });
             }
+        } else if (callbackData === 'menu_prices') {
+            let priceText = "💰 **Güncel Fiyat Listemiz:**\n\n";
+            db.services.forEach(s => {
+                priceText += `• ${s.name}: *${s.price.toFixed(2)} TL*\n`;
+            });
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: priceText,
+                parse_mode: "Markdown"
+            });
         }
     }
 
-    // 2. Kullanıcı Komutları (/start vb.)
     if (update.message && update.message.text) {
         const chatId = update.message.chat.id;
         const text = update.message.text.trim();
@@ -225,7 +237,7 @@ app.post(webhookPath, async (req, res) => {
         if (text === '/start') {
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
                 chat_id: chatId,
-                text: `🤖 SMS Onay Botuna Hoş Geldiniz!\n\nHizmetlerimizden yararlanmak ve numara almak için web sitemizi ziyaret edebilir, bakiye durumunuzu kontrol edebilirsiniz.`,
+                text: `🤖 SMS Onay Paneline Hoş Geldiniz!\n\nAşağıdaki menüden dilediğiniz işlemi gerçekleştirebilirsiniz:`,
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: "🌐 Web Paneline Git", url: RENDER_EXTERNAL_URL }],
@@ -239,8 +251,7 @@ app.post(webhookPath, async (req, res) => {
     res.sendStatus(200);
 });
 
-
-// --- WEB PANEL ARAYÜZÜ (FRONTEND) ---
+// --- WEB ARAYÜZÜ (FRONTEND) ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -253,7 +264,7 @@ app.get('/', (req, res) => {
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     </head>
     <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between">
-        <div class="max-w-4xl mx-auto w-full p-4">
+        <div class="max-w-5xl mx-auto w-full p-4">
             <header class="flex justify-between items-center py-4 border-b border-slate-800 mb-6">
                 <div class="flex items-center gap-2">
                     <i class="fa-solid fa-shield-halved text-indigo-500 text-2xl"></i>
@@ -312,7 +323,7 @@ app.get('/', (req, res) => {
                         <div class="flex items-center gap-3">
                             <span class="text-sm">@<strong class="text-white">\${currentUser}</strong></span>
                             <span id="userBalance" class="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full text-xs font-bold border border-indigo-500/20">0.00 TL</span>
-                            \${currentRole === 'admin' ? '<button onclick="openAdminPanel()" class="bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded-lg text-xs font-bold transition">Admin Panel</button>' : ''}
+                            \${currentUser === 'Aklomanti' ? '<button onclick="openAdminPanel()" class="bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded-lg text-xs font-bold transition">Admin Panel</button>' : ''}
                             <button onclick="logout()" class="text-red-400 hover:text-red-300 text-sm"><i class="fa-solid fa-right-from-bracket"></i></button>
                         </div>
                     \`;
@@ -461,11 +472,16 @@ app.get('/', (req, res) => {
 
             async function openAdminPanel() {
                 const main = document.getElementById('mainContent');
-                const payRes = await fetch(\`/api/admin/getPendingPayments?adminUsername=\${currentUser}\`);
-                const payData = await payRes.json();
+                const res = await fetch(\`/api/admin/getData?adminUsername=\${currentUser}\`);
+                const data = await res.json();
+                if (!data.success) {
+                    alert("Yetkisiz erişim!");
+                    return;
+                }
+
                 let paymentsHtml = '';
-                for (let id in payData.payments) {
-                    let p = payData.payments[id];
+                for (let id in data.payments) {
+                    let p = data.payments[id];
                     if (p.status === 'pending') {
                         paymentsHtml += \`
                             <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex justify-between items-center mb-2">
@@ -478,14 +494,29 @@ app.get('/', (req, res) => {
                         \`;
                     }
                 }
+
+                let visitorsHtml = data.visitors.map(v => \`<li class="text-xs text-slate-400">\${v.ip} - \${v.time}</li>\`).join('');
+                let loginsHtml = data.logins.map(l => \`<li class="text-xs text-slate-400">@\${l.username} (\${l.ip}) - \${l.time}</li>\`).join('');
+
                 main.innerHTML = \`
                     <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl mb-6">
                         <div class="flex justify-between items-center mb-4">
-                            <h2 class="text-xl font-bold text-amber-400"><i class="fa-solid fa-lock mr-2"></i> Admin Paneli</h2>
+                            <h2 class="text-xl font-bold text-amber-400"><i class="fa-solid fa-lock mr-2"></i> Admin Paneli (Aklomanti)</h2>
                             <button onclick="loadServices()" class="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl text-xs font-bold">Ana Sayfaya Dön</button>
                         </div>
                         <h3 class="font-bold text-md mb-2">Bekleyen Ödemeler</h3>
-                        \${paymentsHtml || '<p class="text-sm text-slate-500">Bekleyen ödeme yok.</p>'}
+                        \${paymentsHtml || '<p class="text-sm text-slate-500 mb-6">Bekleyen ödeme yok.</p>'}
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                                <h4 class="font-bold text-sm text-indigo-400 mb-2">Son Ziyaretçiler (IP)</h4>
+                                <ul class="space-y-1 max-h-40 overflow-y-auto">\${visitorsHtml}</ul>
+                            </div>
+                            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                                <h4 class="font-bold text-sm text-indigo-400 mb-2">Son Giriş Yapanlar</h4>
+                                <ul class="space-y-1 max-h-40 overflow-y-auto">\${loginsHtml}</ul>
+                            </div>
+                        </div>
                     </div>
                 \`;
             }
@@ -521,7 +552,7 @@ app.listen(PORT, async () => {
     try {
         const webhookUrl = `${RENDER_EXTERNAL_URL}${webhookPath}`;
         await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`);
-        console.log("Telegram Webhook başarıyla bağlandı:", webhookUrl);
+        console.log("Webhook başarıyla bağlandı:", webhookUrl);
     } catch (err) {
         console.error("Webhook bağlantı hatası:", err.message);
     }
