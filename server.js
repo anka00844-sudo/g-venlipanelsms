@@ -131,6 +131,9 @@ async function countryOf(item) {
 }
 
 let stockCache = {}; // ülke -> { time, data }
+let rawStatus = {};
+let rawPrices = {};
+let priceCache = {};
 async function getCountryStatus(country) {
     const c = stockCache[country];
     if (c && Date.now() - c.time < 10000) return c.data;
@@ -140,10 +143,12 @@ async function getCountryStatus(country) {
             timeout: 15000
         });
         let d = resp.data;
+        rawStatus[country] = (typeof d === 'string' ? d : JSON.stringify(d)).slice(0, 400);
         if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
         stockCache[country] = { time: Date.now(), data: d };
         return d;
     } catch (e) {
+        rawStatus[country] = 'HATA: ' + e.message;
         return null;
     }
 }
@@ -157,16 +162,35 @@ function stockFromStatus(status, code) {
     }
     return null;
 }
+async function getPricesFor(country, code) {
+    const key = country + '_' + code;
+    const c = priceCache[key];
+    if (c && Date.now() - c.time < 10000) return c.data;
+    let d = null;
+    try {
+        const resp = await axios.get(ONAYLI_SMS_URL, {
+            params: { api_key: ONAYLI_SMS_API_KEY, action: 'getPrices', country: country, service: code },
+            timeout: 15000
+        });
+        d = resp.data;
+        rawPrices[key] = (typeof d === 'string' ? d : JSON.stringify(d)).slice(0, 400);
+        if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
+    } catch (e) {
+        rawPrices[key] = 'HATA: ' + e.message;
+    }
+    priceCache[key] = { time: Date.now(), data: d };
+    return d;
+}
 async function getStock(country, code) {
     const st = stockFromStatus(await getCountryStatus(country), code);
     if (st !== null) return st;
-    try {
-        const p = await getProviderPrices();
-        const a = p && p[country] && p[country][code];
+    const p = await getPricesFor(country, code);
+    if (p && typeof p === 'object') {
+        const a = p[country] && p[country][code];
         if (a) return readInfo(a).count;
-        const b = p && p[code] && p[code][country];
+        const b = p[code] && p[code][country];
         if (b) return readInfo(b).count;
-    } catch (e) {}
+    }
     return null;
 }
 
@@ -291,6 +315,8 @@ app.get('/api/admin/testApi', async (req, res) => {
                 kullanilanUlkeId: country,
                 servis: item.serviceCode,
                 stok: await getStock(country, item.serviceCode),
+                ham_getNumbersStatus_metin: rawStatus[country] || null,
+                ham_getPrices_metin: rawPrices[country + '_' + item.serviceCode] || null,
                 ham_getNumbersStatus: status && typeof status === 'object' ? (function () { const o = {}; for (const k in status) { if (k === item.serviceCode || k.startsWith(item.serviceCode + '_')) o[k] = status[k]; } return Object.keys(o).length ? o : 'bu servis yanıtta yok (anahtar sayısı: ' + Object.keys(status).length + ')'; })() : status
             });
         }
