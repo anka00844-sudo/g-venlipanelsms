@@ -85,13 +85,50 @@ function readInfo(info) {
 }
 
 // ====== SABİT ÜRÜN KATALOĞU (sadece bu 4 ürün satılır) ======
-// country: sağlayıcının ülke ID'si. Türkiye=62, Filipinler=4, ABD=187
+// defCountry: ülke ID'si bulunamazsa kullanılacak varsayılan. Gerçek ID sağlayıcıdan otomatik bulunur.
 const CATALOG = [
-    { id: 'wa_62',  name: 'WhatsApp Türkiye',   serviceCode: 'wa', country: '62',  price: 300 },
-    { id: 'tg_62',  name: 'Telegram Türkiye',   serviceCode: 'tg', country: '62',  price: 200 },
-    { id: 'wa_4',   name: 'WhatsApp Filipinler', serviceCode: 'wa', country: '4',   price: 200 },
-    { id: 'tg_187', name: 'Telegram ABD',       serviceCode: 'tg', country: '187', price: 200 }
+    { id: 'wa_tr', key: 'tr', name: 'WhatsApp Türkiye',    serviceCode: 'wa', defCountry: '62',  price: 300 },
+    { id: 'tg_tr', key: 'tr', name: 'Telegram Türkiye',    serviceCode: 'tg', defCountry: '62',  price: 200 },
+    { id: 'wa_ph', key: 'ph', name: 'WhatsApp Filipinler', serviceCode: 'wa', defCountry: '4',   price: 200 },
+    { id: 'tg_us', key: 'us', name: 'Telegram ABD',        serviceCode: 'tg', defCountry: '187', price: 200 }
 ];
+const COUNTRY_WANT = {
+    tr: ['turkey', 'türkiye', 'turkiye', 'турция'],
+    ph: ['philippines', 'filipinler', 'филиппины'],
+    us: ['usa', 'united states', 'united states of america', 'abd', 'сша']
+};
+
+// Ülke ID'lerini sağlayıcıdan otomatik bul (getCountries). Bulamazsa varsayılanlar kullanılır.
+let countryCache = { time: 0, map: {}, count: 0 };
+async function resolveCountries() {
+    if (countryCache.time && Date.now() - countryCache.time < 3600000) return countryCache.map;
+    const map = {};
+    let count = 0;
+    try {
+        const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getCountries' }, timeout: 15000 });
+        let d = r.data;
+        if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
+        if (d && typeof d === 'object') {
+            const arr = Array.isArray(d) ? d : Object.keys(d).map(k => Object.assign({ _k: k }, typeof d[k] === 'object' ? d[k] : { name: d[k] }));
+            count = arr.length;
+            for (const c of arr) {
+                if (!c || typeof c !== 'object') continue;
+                const id = c.id !== undefined ? String(c.id) : (c._k !== undefined ? String(c._k) : null);
+                if (id === null) continue;
+                const names = [c.eng, c.rus, c.name, c.title, c.tr, c.country].filter(Boolean).map(x => String(x).toLowerCase().trim());
+                for (const key in COUNTRY_WANT) {
+                    if (!map[key] && names.some(n => COUNTRY_WANT[key].includes(n))) map[key] = id;
+                }
+            }
+        }
+    } catch (e) {}
+    countryCache = { time: Date.now(), map, count };
+    return map;
+}
+async function countryOf(item) {
+    const map = await resolveCountries();
+    return map[item.key] || item.defCountry;
+}
 
 let stockCache = {}; // ülke -> { time, data }
 async function getCountryStatus(country) {
@@ -120,6 +157,18 @@ function stockFromStatus(status, code) {
     }
     return null;
 }
+async function getStock(country, code) {
+    const st = stockFromStatus(await getCountryStatus(country), code);
+    if (st !== null) return st;
+    try {
+        const p = await getProviderPrices();
+        const a = p && p[country] && p[country][code];
+        if (a) return readInfo(a).count;
+        const b = p && p[code] && p[code][country];
+        if (b) return readInfo(b).count;
+    } catch (e) {}
+    return null;
+}
 
 // ====== SERVİS LİSTESİ ======
 app.get('/api/getServices', async (req, res) => {
@@ -128,14 +177,14 @@ app.get('/api/getServices', async (req, res) => {
     for (const item of CATALOG) {
         if (q && !item.name.toLowerCase().includes(q)) continue;
         const meta = SERVICE_INFO[item.serviceCode];
-        const status = await getCountryStatus(item.country);
-        const st = stockFromStatus(status, item.serviceCode);
+        const country = await countryOf(item);
+        const st = await getStock(country, item.serviceCode);
         list.push({
             id: item.id,
             name: item.name,
             price: item.price,
             serviceCode: item.serviceCode,
-            country: item.country,
+            country: country,
             stockText: st === null ? 'Stok: kontrol edilemedi' : (st > 0 ? st + ' Adet Stok' : 'Stok Yok'),
             icon: meta.icon, iconType: meta.type, color: meta.color, bg: meta.bg
         });
@@ -226,23 +275,24 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
-// Sağlayıcı bağlantı testi: sağlayıcı bakiyesi + ülke stok yanıtları
+// Sağlayıcı bağlantı testi: bakiye, bulunan ülke ID'leri ve stok yanıtları
 app.get('/api/admin/testApi', async (req, res) => {
     if (!isAdmin(req.query.adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     try {
         const balResp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 20000 });
-        const out = { success: true, providerBalance: balResp.data, countries: {} };
-        for (const c of ['62', '4', '187']) {
-            try {
-                const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumbersStatus', country: c }, timeout: 20000 });
-                let d = r.data;
-                if (typeof d === 'object') {
-                    const pick = {};
-                    for (const k in d) { if (k.startsWith('wa') || k.startsWith('tg')) pick[k] = d[k]; }
-                    d = Object.keys(pick).length ? pick : 'wa/tg anahtarı yok, toplam anahtar sayısı: ' + Object.keys(d).length;
-                }
-                out.countries[c] = d;
-            } catch (e) { out.countries[c] = 'HATA: ' + e.message; }
+        countryCache.time = 0;
+        const map = await resolveCountries();
+        const out = { success: true, providerBalance: balResp.data, getCountriesKayitSayisi: countryCache.count, bulunanUlkeIdleri: map, urunler: [] };
+        for (const item of CATALOG) {
+            const country = await countryOf(item);
+            const status = await getCountryStatus(country);
+            out.urunler.push({
+                urun: item.name,
+                kullanilanUlkeId: country,
+                servis: item.serviceCode,
+                stok: await getStock(country, item.serviceCode),
+                ham_getNumbersStatus: status && typeof status === 'object' ? (function () { const o = {}; for (const k in status) { if (k === item.serviceCode || k.startsWith(item.serviceCode + '_')) o[k] = status[k]; } return Object.keys(o).length ? o : 'bu servis yanıtta yok (anahtar sayısı: ' + Object.keys(status).length + ')'; })() : status
+            });
         }
         res.json(out);
     } catch (e) {
@@ -263,25 +313,36 @@ const PROVIDER_ERRORS = {
 };
 
 app.post('/api/buyNumber', async (req, res) => {
-    const { serviceCode, country, username } = req.body;
+    const { productId, username } = req.body;
     const userObj = db.users[username];
     if (!userObj) return res.json({ success: false, message: "Kullanıcı bulunamadı." });
 
-    const item = CATALOG.find(c => c.serviceCode === serviceCode && c.country === String(country));
+    const item = CATALOG.find(c => c.id === productId);
     if (!item) return res.json({ success: false, message: "Geçersiz ürün." });
 
     const price = item.price; // fiyat sunucudan, müşteri değiştiremez
     if (userObj.balance < price) return res.json({ success: false, message: "Yetersiz bakiye! Lütfen bakiye yükleyin." });
 
     try {
-        const resp = await axios.get(ONAYLI_SMS_URL, {
-            params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: item.country },
-            timeout: 30000
-        });
-        let responseText = resp.data;
-        if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
-        responseText = responseText ? String(responseText).trim() : '';
-        console.log('[getNumber] service=' + item.serviceCode + ' country=' + item.country + ' -> "' + responseText + '"');
+        const country = await countryOf(item);
+        let responseText = '';
+
+        // Sağlayıcı anlık "NO_NUMBERS" dönebiliyor; 3 kez dene
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const resp = await axios.get(ONAYLI_SMS_URL, {
+                params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: country },
+                timeout: 30000
+            });
+            responseText = resp.data;
+            if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
+            responseText = responseText ? String(responseText).trim() : '';
+            console.log('[getNumber] ' + item.id + ' country=' + country + ' deneme=' + (attempt + 1) + ' -> "' + responseText + '"');
+            if (responseText.startsWith('NO_NUMBERS') && attempt < 2) {
+                await new Promise(r => setTimeout(r, 1500));
+                continue;
+            }
+            break;
+        }
 
         if (responseText.startsWith('ACCESS_NUMBER')) {
             const parts = responseText.split(':');
@@ -305,7 +366,10 @@ app.post('/api/buyNumber', async (req, res) => {
         }
 
         const key = responseText.split(':')[0];
-        const msg = PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText);
+        let msg = PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText);
+        if (['NO_NUMBERS', 'BAD_COUNTRY', 'WRONG_SERVICE', 'BAD_SERVICE'].includes(key)) {
+            msg += ' [sağlayıcı kodu: ' + key + ', ülke ID: ' + country + ', servis: ' + item.serviceCode + ']';
+        }
         return res.json({ success: false, message: msg });
     } catch (error) {
         console.error("API Bağlantı Hatası:", error.message);
@@ -559,13 +623,12 @@ app.get('/', (req, res) => {
                     '<div><h3 class="font-bold text-sm text-white">' + s.name + '</h3>' +
                     '<p class="text-emerald-400 font-bold text-sm">' + s.price.toFixed(2) + ' TL <span class="text-xs ml-2 font-mono text-emerald-400">' + s.stockText + '</span></p></div>' +
                     '</div>' +
-                    '<button data-code="' + s.serviceCode + '" data-country="' + s.country + '" onclick="buyNumber(this)" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition">Numara Al</button>' +
+                    '<button data-id="' + s.id + '" onclick="buyNumber(this)" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition">Numara Al</button>' +
                     '</div>';
             }
 
             async function buyNumber(btn) {
-                var serviceCode = btn.getAttribute('data-code');
-                var country = btn.getAttribute('data-country');
+                var productId = btn.getAttribute('data-id');
                 btn.disabled = true;
                 btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Alınıyor...';
 
@@ -573,7 +636,7 @@ app.get('/', (req, res) => {
                     var res = await fetch('/api/buyNumber', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ serviceCode: serviceCode, country: country, username: currentUser })
+                        body: JSON.stringify({ productId: productId, username: currentUser })
                     });
                     var data = await res.json();
                     btn.disabled = false;
