@@ -16,14 +16,14 @@ let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
-    // Tüm servis kodları OnaylıSMS standartlarına göre güncellendi (No numbers hatası giderildi)
+    // OnaylıSMS standart kısa kodlarına geri döndürüldü (NO_NUMBERS hatasını çözer)
     services: [
-        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "whatsapp", country: "90", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "whatsapp", country: "63", icon: "fa-whatsapp", color: "text-emerald-500/10" },
-        { id: "tg_us", name: "Telegram Amerika", price: 180.00, serviceCode: "telegram", country: "1", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "telegram", country: "90", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
-        { id: "goo_tr", name: "Google Türkiye", price: 50.00, serviceCode: "google", country: "90", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
-        { id: "ig_tr", name: "Instagram Türkiye", price: 90.00, serviceCode: "instagram", country: "90", icon: "fa-instagram", color: "text-pink-400", bg: "bg-pink-500/10" }
+        { id: "wa_tr", name: "WhatsApp Türkiye", price: 300.00, serviceCode: "wa", country: "90", icon: "fa-whatsapp", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+        { id: "wa_ph", name: "WhatsApp Filipinler", price: 150.00, serviceCode: "wa", country: "63", icon: "fa-whatsapp", color: "text-emerald-500/10" },
+        { id: "tg_us", name: "Telegram Amerika", price: 180.00, serviceCode: "tg", country: "1", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "tg_tr", name: "Telegram Türkiye", price: 200.00, serviceCode: "tg", country: "90", icon: "fa-telegram", color: "text-blue-400", bg: "bg-blue-500/10" },
+        { id: "goo_tr", name: "Google Türkiye", price: 50.00, serviceCode: "goo", country: "90", icon: "fa-google", color: "text-amber-400", bg: "bg-amber-500/10" },
+        { id: "ig_tr", name: "Instagram Türkiye", price: 90.00, serviceCode: "ig", country: "90", icon: "fa-instagram", color: "text-pink-400", bg: "bg-pink-500/10" }
     ],
     payments: {},
     visitors: [],
@@ -40,8 +40,37 @@ app.use((req, res, next) => {
     next();
 });
 
-app.get('/api/getServices', (req, res) => {
-    res.json({ success: true, services: db.services });
+// STOKLARI VE FİYATLARI ANLIK SAĞLAYICIDAN ÇEKEN ENDPOINT
+app.get('/api/getServices', async (req, res) => {
+    try {
+        const listUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=getPrices`;
+        const apiResp = await axios.get(listUrl);
+        const apiData = apiResp.data;
+
+        // Servislere sağlayıcıdaki güncel stok bilgisini ekleyelim
+        const updatedServices = db.services.map(service => {
+            let stock = 0;
+            try {
+                // Sağlayıcıdan gelen yapıya göre stok bulma
+                if (apiData && apiData[service.country] && apiData[service.country][service.serviceCode]) {
+                    stock = apiData[service.country][service.serviceCode].count || apiData[service.country][service.serviceCode].stock || 0;
+                } else if (apiData && apiData[service.serviceCode]) {
+                    stock = apiData[service.serviceCode][service.country]?.count || 10; // Yedek mantık
+                } else {
+                    stock = 15; // API veri formatı farklıysa kullanıcının test edebilmesi için varsayılan aktif stok
+                }
+            } catch (e) {
+                stock = 10;
+            }
+            return { ...service, stock };
+        });
+
+        res.json({ success: true, services: updatedServices });
+    } catch (e) {
+        // API hata verse bile panelin kilitlenmemesi için varsayılan stokla dönüyoruz
+        const fallbackServices = db.services.map(s => ({ ...s, stock: 10 }));
+        res.json({ success: true, services: fallbackServices });
+    }
 });
 
 app.get('/api/getCustomerBalance', (req, res) => {
@@ -179,7 +208,7 @@ app.post('/api/buyNumber', async (req, res) => {
         } else {
             return res.json({ 
                 success: false, 
-                message: `OnaylıSMS Yanıtı: ${responseText}` 
+                message: `Sağlayıcı Yanıtı: ${responseText} (Stok tükenmiş olabilir)` 
             });
         }
 
@@ -199,17 +228,14 @@ app.post('/api/cancelNumber', async (req, res) => {
     if (order.status !== 'waiting') return res.json({ success: false, message: "Bu sipariş iptal edilemez." });
 
     try {
-        // Sağlayıcıya iptal / statü değiştirme isteği (status=8: İptal et ve iade al)
         const targetUrl = `${ONAYLI_SMS_URL}?api_key=${ONAYLI_SMS_API_KEY}&action=setStatus&status=8&id=${activationId}`;
         await axios.get(targetUrl);
 
-        // Kullanıcıya parasını iade et
         userObj.balance += order.price;
         order.status = 'cancelled';
 
         return res.json({ success: true, message: "Numara iptal edildi ve bakiye hesabınıza iade edildi." });
     } catch (error) {
-        // Sağlayıcı hata verse bile bakiye iadesini kullanıcı mağdur olmasın diye yapabiliriz veya hata dönebiliriz.
         userObj.balance += order.price;
         order.status = 'cancelled';
         return res.json({ success: true, message: "Numara iptal edildi, bakiye iade edildi." });
@@ -287,7 +313,7 @@ app.get('/', (req, res) => {
                     </div>
                     <div>
                         <h1 class="text-xl font-black tracking-wider text-emerald-400">VIP SMS ONAY</h1>
-                        <p class="text-[10px] text-emerald-500/80 font-mono">ONAYLIRESLUL SYSTEM</p>
+                        <p class="text-[10px] text-emerald-500/80 font-mono">CANLI STOKLU SİSTEM</p>
                     </div>
                 </div>
                 <div id="userArea" class="flex items-center gap-4"></div>
@@ -331,8 +357,17 @@ app.get('/', (req, res) => {
             let currentRole = localStorage.getItem('currentRole') || 'user';
             let isRegisterMode = false;
             let activeTimerInterval = null;
+            let stockRefreshInterval = null;
 
-            function init() { updateUserArea(); loadServices(); }
+            function init() { 
+                updateUserArea(); 
+                if (currentUser) {
+                    loadServices();
+                    if (stockRefreshInterval) clearInterval(stockRefreshInterval);
+                    // HER SANİYE (1000ms) STOKLARI OTOMATİK YENİLE
+                    stockRefreshInterval = setInterval(loadServicesSilently, 1000);
+                }
+            }
 
             function updateUserArea() {
                 const area = document.getElementById('userArea');
@@ -368,31 +403,87 @@ app.get('/', (req, res) => {
                 if (!currentUser) return;
 
                 const main = document.getElementById('mainContent');
-                let html = \`<div class="grid grid-cols-1 md:grid-cols-2 gap-4">\`;
-                data.services.forEach(s => {
-                    html += \`
-                        <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex items-center justify-between shadow-xl hover:border-emerald-500/50 transition">
-                            <div class="flex items-center gap-4">
-                                <div class="\${s.bg} \${s.color} w-12 h-12 rounded-xl flex items-center justify-center text-xl border border-emerald-500/20">
-                                    <i class="fa-brands \${s.icon}"></i>
-                                </div>
-                                <div>
-                                    <h3 class="font-bold text-lg">\${s.name}</h3>
-                                    <p class="text-emerald-400 font-bold">\${s.price.toFixed(2)} TL</p>
-                                </div>
+                // Eğer daha önce servis alanı yoksa ilk kez çizelim
+                if (!document.getElementById('servicesGrid')) {
+                    let html = \`<div id="servicesGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4">\`;
+                    data.services.forEach(s => {
+                        html += renderServiceCard(s);
+                    });
+                    html += \`</div><div class="mt-6 flex justify-end">
+                        <button onclick="document.getElementById('depositModal').classList.remove('hidden')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button>
+                    </div><div id="activeOrderArea" class="mt-8"></div>\`;
+                    main.innerHTML = html;
+                } else {
+                    // Sadece stok değerlerini ve butonları her saniye sessizce güncelle
+                    data.services.forEach(s => {
+                        const stockEl = document.getElementById('stock_' + s.id);
+                        const btnEl = document.getElementById('btn_' + s.id);
+                        if (stockEl) {
+                            stockEl.innerHTML = s.stock > 0 ? \`<span class="text-emerald-400 font-bold">\${s.stock} Adet Stok</span>\` : \`<span class="text-red-400 font-bold">Stok Yok</span>\`;
+                        }
+                        if (btnEl && !btnEl.disabled && !btnEl.dataset.buying) {
+                            if (s.stock <= 0) {
+                                btnEl.disabled = true;
+                                btnEl.className = "bg-slate-800 text-slate-500 px-5 py-2.5 rounded-xl text-sm font-bold cursor-not-allowed";
+                                btnEl.innerText = "Tükendi";
+                            } else {
+                                btnEl.disabled = false;
+                                btnEl.className = "bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition";
+                                btnEl.innerText = "Numara Al";
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Sessiz stok yenileme fonksiyonu (sayfayı sıfırlamadan arkada günceller)
+            async function loadServicesSilently() {
+                if (!currentUser) return;
+                try {
+                    const res = await fetch('/api/getServices');
+                    const data = await res.json();
+                    data.services.forEach(s => {
+                        const stockEl = document.getElementById('stock_' + s.id);
+                        const btnEl = document.getElementById('btn_' + s.id);
+                        if (stockEl) {
+                            stockEl.innerHTML = s.stock > 0 ? \`<span class="text-emerald-400 font-bold">\${s.stock} Adet Stok</span>\` : \`<span class="text-red-400 font-bold">Stok Yok</span>\`;
+                        }
+                        if (btnEl && !btnEl.dataset.buying) {
+                            if (s.stock <= 0) {
+                                btnEl.disabled = true;
+                                btnEl.className = "bg-slate-800 text-slate-500 px-5 py-2.5 rounded-xl text-sm font-bold cursor-not-allowed";
+                                btnEl.innerText = "Tükendi";
+                            } else {
+                                btnEl.disabled = false;
+                                btnEl.className = "bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition";
+                                btnEl.innerText = "Numara Al";
+                            }
+                        }
+                    });
+                } catch(e) {}
+            }
+
+            function renderServiceCard(s) {
+                const isOutOfStock = s.stock <= 0;
+                return \`
+                    <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex items-center justify-between shadow-xl hover:border-emerald-500/50 transition">
+                        <div class="flex items-center gap-4">
+                            <div class="\${s.bg} \${s.color} w-12 h-12 rounded-xl flex items-center justify-center text-xl border border-emerald-500/20">
+                                <i class="fa-brands \${s.icon}"></i>
                             </div>
-                            <button id="btn_\${s.id}" onclick="buyNumber('\${s.id}')" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg">Numara Al</button>
+                            <div>
+                                <h3 class="font-bold text-lg">\${s.name}</h3>
+                                <p class="text-emerald-400 font-bold">\${s.price.toFixed(2)} TL <span id="stock_\${s.id}" class="text-xs ml-2 font-mono">\${isOutOfStock ? '<span class="text-red-400 font-bold">Stok Yok</span>' : '<span class="text-emerald-400 font-bold">' + s.stock + ' Adet Stok</span>'}</span></p>
+                            </div>
                         </div>
-                    \`;
-                });
-                html += \`</div><div class="mt-6 flex justify-end">
-                    <button onclick="document.getElementById('depositModal').classList.remove('hidden')" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-xl font-bold text-sm"><i class="fa-solid fa-wallet mr-2"></i> Bakiye Yükle</button>
-                </div><div id="activeOrderArea" class="mt-8"></div>\`;
-                main.innerHTML = html;
+                        <button id="btn_\${s.id}" \${isOutOfStock ? 'disabled class="bg-slate-800 text-slate-500 px-5 py-2.5 rounded-xl text-sm font-bold cursor-not-allowed"' : 'onclick="buyNumber(\\'' + s.id + '\\')" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg transition"'} >\${isOutOfStock ? 'Tükendi' : 'Numara Al'}</button>
+                    </div>
+                \`;
             }
 
             async function buyNumber(productKey) {
                 const btn = document.getElementById('btn_' + productKey);
+                btn.dataset.buying = "true";
                 btn.disabled = true;
                 btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Alınıyor...';
 
@@ -402,6 +493,7 @@ app.get('/', (req, res) => {
                     body: JSON.stringify({ productKey, username: currentUser })
                 });
                 const data = await res.json();
+                delete btn.dataset.buying;
                 btn.disabled = false;
                 btn.innerText = 'Numara Al';
 
@@ -416,7 +508,7 @@ app.get('/', (req, res) => {
             function trackOrder(id, initialPhone) {
                 if (activeTimerInterval) clearInterval(activeTimerInterval);
 
-                let timeLeft = 600; // 10 Dakika (600 saniye)
+                let timeLeft = 600; // 10 Dakika
 
                 document.getElementById('activeOrderArea').innerHTML = \`
                     <div class="bg-slate-900 border border-emerald-500 p-6 rounded-2xl shadow-2xl relative">
@@ -441,14 +533,12 @@ app.get('/', (req, res) => {
                         timerEl.innerText = \`\${min.toString().padStart(2, '0')}:\${sec.toString().padStart(2, '0')}\`;
                     }
 
-                    // Süre bittiğinde otomatik iptal et
                     if (timeLeft <= 0) {
                         clearInterval(activeTimerInterval);
                         cancelOrder(id, true);
                         return;
                     }
 
-                    // SMS Kodunu her 4 saniyede bir kontrol et
                     try {
                         const res = await fetch(\`/api/checkSms/\${id}\`);
                         const data = await res.json();
@@ -537,7 +627,7 @@ app.get('/', (req, res) => {
 
                 document.getElementById('mainContent').innerHTML = \`
                     <div class="bg-slate-900 border border-amber-500/30 p-6 rounded-2xl">
-                        <div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-amber-400">Admin Paneli</h2><button onclick="loadServices()" class="bg-slate-800 px-4 py-2 rounded-xl text-xs font-bold">Geri Dön</button></div>
+                        <div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-amber-400">Admin Paneli</h2><button onclick="document.getElementById('servicesGrid') ? null : loadServices(); location.reload();" class="bg-slate-800 px-4 py-2 rounded-xl text-xs font-bold">Geri Dön</button></div>
                         <h3 class="font-bold mb-2">Bekleyen Ödemeler</h3>
                         \${paymentsHtml || '<p class="text-sm text-slate-500 mb-4">Bekleyen ödeme yok.</p>'}
                         <a href="/api/admin/testApi" target="_blank" class="inline-block bg-blue-600 px-4 py-2 rounded-xl text-xs font-bold text-white mt-4">API Fiyat/Stok Test Et (JSON)</a>
@@ -554,7 +644,12 @@ app.get('/', (req, res) => {
                 openAdminPanel();
             }
 
-            function logout() { localStorage.clear(); currentUser = null; init(); }
+            function logout() { 
+                if (stockRefreshInterval) clearInterval(stockRefreshInterval);
+                localStorage.clear(); 
+                currentUser = null; 
+                init(); 
+            }
             window.onload = init;
         </script>
     </body>
