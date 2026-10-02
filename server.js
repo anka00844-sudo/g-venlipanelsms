@@ -13,6 +13,8 @@ const ONAYLI_SMS_API_KEY = process.env.ONAYLI_SMS_API_KEY || 'osms_7f193a3fe6544
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
 // Sağlayıcı fiyatını TL'ye çevirmek / kâr eklemek için çarpan (örn: 1.5 = %50 fazlası)
 const PRICE_MULTIPLIER = parseFloat(process.env.PRICE_MULTIPLIER || '1');
+// Normal fiyatta numara yoksa, sağlayıcıdan satış fiyatının bu oranına kadar daha pahalı numara alınabilir
+const MAX_COST_FACTOR = parseFloat(process.env.MAX_COST_FACTOR || '0.8');
 
 let db = {
     users: {
@@ -325,6 +327,7 @@ app.get('/api/admin/testApi', async (req, res) => {
 // ====== NUMARA SATIN ALMA ======
 const PROVIDER_ERRORS = {
     NO_NUMBERS: 'Bu servis için şu an numara kalmamış. Başka ülke/servis deneyin.',
+    WRONG_MAX_PRICE: 'Sağlayıcıdaki en ucuz numara belirlenen maliyet sınırının üzerinde.',
     NO_BALANCE: 'Sağlayıcı hesabında bakiye yok (panel sahibi bakiye yüklemeli).',
     BAD_KEY: 'Sağlayıcı API anahtarı hatalı.',
     BAD_SERVICE: 'Servis kodu geçersiz.',
@@ -374,6 +377,19 @@ app.post('/api/buyNumber', async (req, res) => {
                 }
                 break outer; // başka bir hata (bakiye, anahtar vb.) -> tekrar deneme
             }
+
+            // Normal fiyat kademesinde numara yoksa daha yüksek kademeyi dene (maliyet sınırı: satış fiyatı x MAX_COST_FACTOR)
+            const maxPrice = Math.floor(price * MAX_COST_FACTOR);
+            const resp2 = await axios.get(ONAYLI_SMS_URL, {
+                params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: country, freePrice: 'true', maxPrice: maxPrice },
+                timeout: 30000
+            });
+            responseText = resp2.data;
+            if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
+            responseText = responseText ? String(responseText).trim() : '';
+            console.log('[getNumber+freePrice] ' + item.id + ' country=' + country + ' maxPrice=' + maxPrice + ' -> "' + responseText + '"');
+            if (responseText.startsWith('ACCESS_NUMBER')) break outer;
+            if (!responseText.startsWith('NO_NUMBERS') && !responseText.startsWith('WRONG_MAX_PRICE')) break outer;
         }
 
         if (responseText.startsWith('ACCESS_NUMBER')) {
@@ -400,7 +416,7 @@ app.post('/api/buyNumber', async (req, res) => {
         const key = responseText.split(':')[0];
         let msg;
         if (showDetail) {
-            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [kod: ' + key + ', ülke ID: ' + usedCountry + ', servis: ' + item.serviceCode + ']';
+            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [yanıt: ' + responseText + ', ülke ID: ' + usedCountry + ', servis: ' + item.serviceCode + ']';
         } else if (key === 'NO_NUMBERS') {
             msg = 'Bu ürün için şu an numara bulunamadı. Lütfen birkaç dakika sonra tekrar deneyin.';
         } else {
