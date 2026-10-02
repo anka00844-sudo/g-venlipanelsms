@@ -324,6 +324,15 @@ app.get('/api/admin/testApi', async (req, res) => {
     }
 });
 
+let lastBalanceAlert = 0;
+async function notifyLowProviderBalance(text) {
+    if (Date.now() - lastBalanceAlert < 600000) return;
+    lastBalanceAlert = Date.now();
+    try {
+        await axios.post('https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendMessage', { chat_id: ADMIN_CHAT_ID, text: text });
+    } catch (e) {}
+}
+
 // ====== NUMARA SATIN ALMA ======
 const PROVIDER_ERRORS = {
     NO_NUMBERS: 'Bu servis için şu an numara kalmamış. Başka ülke/servis deneyin.',
@@ -356,6 +365,14 @@ app.post('/api/buyNumber', async (req, res) => {
         let responseText = '';
         let usedCountry = main;
 
+        // Sağlayıcı bakiyesi (üst fiyat sınırı bakiyeyi aşarsa sağlayıcı NO_BALANCE döner)
+        let providerBalance = null;
+        try {
+            const bResp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 15000 });
+            const bm = String(bResp.data || '').match(/ACCESS_BALANCE:([0-9.]+)/);
+            if (bm) providerBalance = parseFloat(bm[1]);
+        } catch (e) {}
+
         outer:
         for (const country of countries) {
             usedCountry = country;
@@ -379,7 +396,9 @@ app.post('/api/buyNumber', async (req, res) => {
             }
 
             // Normal fiyat kademesinde numara yoksa daha yüksek kademeyi dene (maliyet sınırı: satış fiyatı x MAX_COST_FACTOR)
-            const maxPrice = Math.floor(price * MAX_COST_FACTOR);
+            let maxPrice = Math.floor(price * MAX_COST_FACTOR);
+            if (providerBalance !== null) maxPrice = Math.min(maxPrice, Math.floor(providerBalance));
+            if (maxPrice < 1) continue;
             const resp2 = await axios.get(ONAYLI_SMS_URL, {
                 params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: country, freePrice: 'true', maxPrice: maxPrice },
                 timeout: 30000
@@ -407,6 +426,7 @@ app.post('/api/buyNumber', async (req, res) => {
                 code: "Bekleniyor...",
                 status: 'waiting',
                 username,
+                createdAt: Date.now(),
                 time: new Date().toLocaleString('tr-TR')
             };
             db.orders[activationId] = order;
@@ -414,9 +434,10 @@ app.post('/api/buyNumber', async (req, res) => {
         }
 
         const key = responseText.split(':')[0];
+        if (key === 'NO_BALANCE') notifyLowProviderBalance('⚠️ OnaylaSMS bakiyen yetersiz! Müşteri numara alamadı (' + item.name + '). Sağlayıcı bakiyesi: ' + (providerBalance !== null ? providerBalance : '?'));
         let msg;
         if (showDetail) {
-            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [yanıt: ' + responseText + ', ülke ID: ' + usedCountry + ', servis: ' + item.serviceCode + ']';
+            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [yanıt: ' + responseText + (providerBalance !== null ? ', sağlayıcı bakiyesi: ' + providerBalance : '') + ', ülke ID: ' + usedCountry + ', servis: ' + item.serviceCode + ']';
         } else if (key === 'NO_NUMBERS') {
             msg = 'Bu ürün için şu an numara bulunamadı. Lütfen birkaç dakika sonra tekrar deneyin.';
         } else {
@@ -427,6 +448,26 @@ app.post('/api/buyNumber', async (req, res) => {
         console.error("API Bağlantı Hatası:", error.message);
         return res.json({ success: false, message: showDetail ? ("Sağlayıcı bağlantı hatası: " + error.message) : "Bağlantı hatası, lütfen tekrar deneyin." });
     }
+});
+
+// ====== SİPARİŞLERİM (sayfa yenilenince numaralar kaybolmasın) ======
+app.get('/api/myOrders', (req, res) => {
+    const { username } = req.query;
+    if (!db.users[username]) return res.json({ success: false, orders: [] });
+    const now = Date.now();
+    const list = Object.values(db.orders)
+        .filter(o => o.username === username && o.createdAt)
+        .filter(o => (o.status === 'waiting' && now - o.createdAt < 600000) || (o.status === 'completed' && now - o.createdAt < 1800000))
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(o => ({
+            activationId: o.activationId,
+            phoneNumber: o.phoneNumber,
+            productName: o.productName,
+            status: o.status,
+            code: o.code,
+            remaining: Math.max(1, Math.floor((600000 - (now - o.createdAt)) / 1000))
+        }));
+    res.json({ success: true, orders: list });
 });
 
 // ====== NUMARA İPTAL ======
@@ -549,14 +590,88 @@ app.get('/', (req, res) => {
             @keyframes flame { to { background-position: 200% center; } }
             .flameIcon { color: #f97316; text-shadow: 0 0 16px #f97316, 0 0 32px #ef4444; animation: flick 1.3s ease-in-out infinite; }
             @keyframes flick { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12) translateY(-2px); opacity: .85; } }
+.phoenixWrap{width:min(420px,80vw);margin:0 auto}
+.phoenixWrap svg{width:100%;height:auto;display:block;filter:drop-shadow(0 0 22px rgba(249,115,22,.7))}
+.flapR{transform-origin:0 0;animation:flap 1.6s ease-in-out infinite}
+@keyframes flap{0%,100%{transform:rotate(16deg)}50%{transform:rotate(-20deg)}}
+.birdFloat{animation:floaty 3.2s ease-in-out infinite}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+.tailS{transform-origin:0 0;animation:sway 2.6s ease-in-out infinite alternate}
+@keyframes sway{from{transform:rotate(-5deg)}to{transform:rotate(5deg)}}
+.ember{opacity:0;animation:ember 3s ease-in infinite}
+@keyframes ember{0%{opacity:0;transform:translateY(0)}20%{opacity:1}100%{opacity:0;transform:translateY(-90px)}}
+            .vipBadge { display: inline-block; margin-left: 8px; padding: 1px 9px; font-size: 11px; font-weight: 900; letter-spacing: 2px; color: #1a1000; background: linear-gradient(90deg,#fde68a,#f59e0b,#fde68a); background-size: 200% auto; border-radius: 6px; animation: shine 3s linear infinite; vertical-align: middle; box-shadow: 0 0 12px rgba(250,204,21,.5); }
+            @keyframes shine { to { background-position: 200% center; } }
+            .vipCard { border: 1px solid rgba(250,204,21,.55) !important; box-shadow: 0 0 40px rgba(249,115,22,.25), inset 0 0 40px rgba(250,204,21,.05); }
             .neon { box-shadow: 0 0 25px rgba(34,197,94,.25), inset 0 0 25px rgba(34,197,94,.05); }
         </style>
     </head>
     <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between">
         <canvas id="matrix"></canvas>
+        <template id="phoenixTpl"><svg viewBox="-40 0 480 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Anka kuşu">
+<defs>
+<linearGradient id="gFire" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fde047"/><stop offset=".5" stop-color="#f97316"/><stop offset="1" stop-color="#dc2626"/></linearGradient>
+<linearGradient id="gWing" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fde047"/><stop offset=".45" stop-color="#f97316"/><stop offset="1" stop-color="#b91c1c"/></linearGradient>
+<linearGradient id="gTail" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset=".55" stop-color="#ef4444"/><stop offset="1" stop-color="#7f1d1d" stop-opacity="0"/></linearGradient>
+<radialGradient id="gGlow"><stop offset="0" stop-color="#fb923c" stop-opacity=".55"/><stop offset="1" stop-color="#fb923c" stop-opacity="0"/></radialGradient>
+<path id="ftW" d="M0 0 C45 -24 125 -22 178 0 C125 17 45 21 0 0 Z"/>
+<path id="ftT" d="M0 0 C-14 55 -11 125 0 185 C11 125 14 55 0 0 Z"/>
+</defs>
+<circle cx="200" cy="190" r="200" fill="url(#gGlow)"/>
+<g class="ember-layer">
+<circle class="ember" cx="90" cy="330" r="3" fill="#fde047" style="animation-delay:.1s"/>
+<circle class="ember" cx="130" cy="380" r="2.5" fill="#fb923c" style="animation-delay:1.1s"/>
+<circle class="ember" cx="170" cy="350" r="3.5" fill="#fde047" style="animation-delay:2s"/>
+<circle class="ember" cx="215" cy="395" r="2.5" fill="#fbbf24" style="animation-delay:.6s"/>
+<circle class="ember" cx="255" cy="345" r="3" fill="#fb923c" style="animation-delay:1.6s"/>
+<circle class="ember" cx="300" cy="385" r="3.5" fill="#fde047" style="animation-delay:.3s"/>
+<circle class="ember" cx="335" cy="320" r="2.5" fill="#fbbf24" style="animation-delay:2.3s"/>
+<circle class="ember" cx="60" cy="260" r="2.5" fill="#fb923c" style="animation-delay:1.4s"/>
+<circle class="ember" cx="350" cy="250" r="3" fill="#fde047" style="animation-delay:.8s"/>
+<circle class="ember" cx="25" cy="190" r="2" fill="#fbbf24" style="animation-delay:2.6s"/>
+<circle class="ember" cx="380" cy="180" r="2" fill="#fb923c" style="animation-delay:1.9s"/>
+</g>
+<g class="birdFloat">
+<g transform="translate(200 232)"><g class="tailS">
+<use href="#ftT" fill="url(#gTail)" transform="rotate(-44) scale(.72)"/>
+<use href="#ftT" fill="url(#gTail)" transform="rotate(44) scale(.72)"/>
+<use href="#ftT" fill="url(#gTail)" transform="rotate(-26) scale(.88)"/>
+<use href="#ftT" fill="url(#gTail)" transform="rotate(26) scale(.88)"/>
+<use href="#ftT" fill="url(#gTail)" transform="rotate(-9) scale(1)"/>
+<use href="#ftT" fill="url(#gTail)" transform="rotate(9) scale(1)"/>
+</g></g>
+<g transform="translate(212 146)"><g class="flapR">
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-80) scale(.6)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-62) scale(.78)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-44) scale(.94)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-26) scale(1)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-8) scale(.96)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(10) scale(.8)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(27) scale(.6)"/>
+</g></g>
+<g transform="translate(188 146) scale(-1 1)"><g class="flapR">
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-80) scale(.6)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-62) scale(.78)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-44) scale(.94)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-26) scale(1)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(-8) scale(.96)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(10) scale(.8)"/>
+<use href="#ftW" fill="url(#gWing)" stroke="#fde68a" stroke-opacity=".55" transform="rotate(27) scale(.6)"/>
+</g></g>
+<path d="M200 112 C172 118 164 160 178 200 C186 226 194 238 200 248 C206 238 214 226 222 200 C236 160 228 118 200 112 Z" fill="url(#gFire)" stroke="#fde68a" stroke-opacity=".6"/>
+<path d="M184 158 q16 13 32 0 M182 180 q18 15 36 0 M185 202 q15 13 30 0" fill="none" stroke="#fff7ae" stroke-opacity=".65" stroke-width="2" stroke-linecap="round"/>
+<path d="M200 76 C190 54 206 38 198 8 C217 34 215 57 208 76 Z" fill="#fde047"/>
+<path d="M189 82 C170 68 177 47 160 34 C187 41 199 59 198 82 Z" fill="#fb923c"/>
+<path d="M211 82 C230 68 223 47 240 34 C213 41 201 59 202 82 Z" fill="#fb923c"/>
+<ellipse cx="200" cy="98" rx="21" ry="25" fill="url(#gFire)" stroke="#fde68a" stroke-opacity=".6"/>
+<path d="M191 110 L200 136 L209 110 C204 114 196 114 191 110 Z" fill="#fbbf24" stroke="#92400e" stroke-opacity=".5"/>
+<ellipse cx="190" cy="96" rx="4.6" ry="3.2" fill="#fff"/><ellipse cx="210" cy="96" rx="4.6" ry="3.2" fill="#fff"/>
+<circle cx="190.5" cy="96" r="1.8" fill="#7c2d12"/><circle cx="209.5" cy="96" r="1.8" fill="#7c2d12"/>
+</g>
+</svg></template>
         <div id="introOverlay" onclick="closeIntro()" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:100;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .8s;cursor:pointer;">
             <div class="font-mono text-emerald-400 text-sm md:text-lg p-6" style="max-width:92%;text-shadow:0 0 8px #22c55e;">
-                <div style="text-align:center;margin-bottom:18px"><i class="fa-solid fa-fire-flame-curved flameIcon" style="font-size:60px"></i></div>
+                <div id="introPhoenix" class="phoenixWrap" style="width:min(300px,70vw);margin-bottom:6px"></div>
                 <span id="introText"></span><span class="blink">&#9608;</span>
                 <p class="text-emerald-700 text-xs mt-6">(geçmek için dokun)</p>
             </div>
@@ -568,7 +683,7 @@ app.get('/', (req, res) => {
                         <i class="fa-solid fa-fire-flame-curved text-xl flameIcon"></i>
                     </div>
                     <div>
-                        <h1 class="anka text-2xl font-black tracking-widest">ANKA SMS</h1>
+                        <h1 class="anka text-2xl font-black tracking-widest inline-block">ANKA SMS</h1><span class="vipBadge">VIP</span>
                         <p class="text-[10px] text-emerald-500/80 font-mono">KÜLLERİNDEN DOĞAN SİSTEM</p>
                     </div>
                 </div>
@@ -621,6 +736,7 @@ app.get('/', (req, res) => {
                 if (currentUser) {
                     buildMain();
                     loadServices();
+                    restoreOrders();
                     if (stockRefreshInterval) clearInterval(stockRefreshInterval);
                     stockRefreshInterval = setInterval(loadServices, 20000);
                 }
@@ -657,8 +773,9 @@ app.get('/', (req, res) => {
                         '<button onclick="openAuthModal(\\'login\\')" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-bold">Giriş Yap</button>' +
                         '<button onclick="openAuthModal(\\'register\\')" class="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl text-sm font-bold">Kayıt Ol</button>';
                     document.getElementById('mainContent').innerHTML =
-                        '<div class="text-center py-16 bg-black/70 backdrop-blur rounded-3xl border border-emerald-500/30 p-8 fadeUp neon">' +
-                        '<i class="fa-solid fa-fire-flame-curved text-6xl flameIcon mb-6"></i>' +
+                        '<div class="text-center py-16 bg-black/70 backdrop-blur rounded-3xl border border-emerald-500/30 p-8 fadeUp neon vipCard">' +
+                        '<div class="phoenixWrap">' + phoenixHTML() + '</div>' +
+                        '<div class="mb-3 mt-2"><span class="vipBadge">VIP ÜYELİK PANELİ</span></div>' +
                         '<h2 class="glitch anka text-5xl md:text-6xl font-black mb-4 font-mono tracking-widest">ANKA SMS</h2>' +
                         '<p class="text-emerald-300/80 font-mono mb-8">Anlık sanal numara &bull; Hızlı SMS kodu &bull; 7/24 aktif<span class="blink">_</span></p>' +
                         '<div class="flex gap-3 justify-center"><button onclick="openLogin()" class="bg-emerald-600 hover:bg-emerald-500 px-8 py-3 rounded-xl font-bold neon">Giriş Yap</button>' +
@@ -724,7 +841,7 @@ app.get('/', (req, res) => {
 
                     if (data.success) {
                         fetchBalance();
-                        trackOrder(data.order.activationId, data.order.phoneNumber);
+                        trackOrder(data.order.activationId, data.order.phoneNumber, 600, data.order.productName, null);
                     } else {
                         alert(data.message);
                         loadServices();
@@ -736,51 +853,77 @@ app.get('/', (req, res) => {
                 }
             }
 
-            function trackOrder(id, initialPhone) {
-                if (activeTimerInterval) clearInterval(activeTimerInterval);
-                var timeLeft = 600; // 10 dakika
+            var orderTimers = {};
 
-                document.getElementById('activeOrderArea').innerHTML =
-                    '<div class="bg-slate-900 border border-emerald-500 p-6 rounded-2xl shadow-2xl relative">' +
-                    '<h3 class="font-bold text-emerald-400 text-lg mb-3"><i class="fa-solid fa-circle-check mr-2"></i> Numara Başarıyla Alındı</h3>' +
-                    '<p class="text-sm text-slate-300">Numara: <strong class="text-white font-mono text-xl select-all">' + initialPhone + '</strong></p>' +
-                    '<p class="text-sm text-slate-300 mt-2">SMS Kod: <strong id="smsCode" class="text-emerald-400 font-mono text-xl animate-pulse">Bekleniyor...</strong></p>' +
+            function trackOrder(id, phone, timeLeft, productName, doneCode) {
+                var area = document.getElementById('activeOrderArea');
+                if (!area) return;
+                var old = document.getElementById('order_' + id);
+                if (old) old.parentNode.removeChild(old);
+                if (orderTimers[id]) { clearInterval(orderTimers[id]); delete orderTimers[id]; }
+                var done = !!doneCode;
+
+                var card = document.createElement('div');
+                card.id = 'order_' + id;
+                card.className = 'bg-slate-900 border border-emerald-500 p-6 rounded-2xl shadow-2xl relative mb-4';
+                card.innerHTML =
+                    '<h3 class="font-bold text-emerald-400 text-lg mb-3"><i class="fa-solid fa-circle-check mr-2"></i> ' + (productName || 'Numara') + '</h3>' +
+                    '<p class="text-sm text-slate-300">Numara: <strong class="text-white font-mono text-xl select-all">' + phone + '</strong></p>' +
+                    '<p class="text-sm text-slate-300 mt-2">SMS Kod: <strong id="smsCode_' + id + '" class="text-emerald-400 font-mono text-xl ' + (done ? '' : 'animate-pulse') + '">' + (done ? doneCode : 'Bekleniyor...') + '</strong></p>' +
                     '<div class="mt-4 flex items-center justify-between border-t border-slate-800 pt-4">' +
-                    '<span class="text-xs text-slate-400">Kod Süresi: <strong id="timerDisplay" class="text-amber-400 font-mono text-sm">10:00</strong></span>' +
-                    '<div id="actionButtons"><button onclick="cancelOrder(\\'' + id + '\\')" class="bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/40 px-4 py-2 rounded-xl text-xs font-bold transition">Değiştir / İptal Et</button></div>' +
+                    '<span class="text-xs text-slate-400">' + (done ? '' : 'Kod Süresi: <strong id="timerDisplay_' + id + '" class="text-amber-400 font-mono text-sm">--:--</strong>') + '</span>' +
+                    '<div id="actionButtons_' + id + '">' + (done
+                        ? '<span class="text-emerald-400 font-bold text-xs"><i class="fa-solid fa-check"></i> Tamamlandı</span>'
+                        : '<button data-id="' + id + '" onclick="cancelBtn(this)" class="bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/40 px-4 py-2 rounded-xl text-xs font-bold transition">Değiştir / İptal Et</button>') +
                     '</div></div>';
+                area.insertBefore(card, area.firstChild);
+                if (done) return;
 
-                activeTimerInterval = setInterval(async function () {
-                    timeLeft--;
+                var tick = 0;
+                orderTimers[id] = setInterval(async function () {
+                    timeLeft--; tick++;
                     var min = Math.floor(timeLeft / 60);
                     var sec = timeLeft % 60;
-                    var timerEl = document.getElementById('timerDisplay');
-                    if (timerEl) {
-                        timerEl.innerText = String(min).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
-                    }
+                    var timerEl = document.getElementById('timerDisplay_' + id);
+                    if (timerEl) timerEl.innerText = String(Math.max(min, 0)).padStart(2, '0') + ':' + String(Math.max(sec, 0)).padStart(2, '0');
 
                     if (timeLeft <= 0) {
-                        clearInterval(activeTimerInterval);
+                        clearInterval(orderTimers[id]); delete orderTimers[id];
                         cancelOrder(id, true);
                         return;
                     }
-
-                    if (timeLeft % 5 !== 0) return; // SMS'i 5 saniyede bir sorgula
+                    if (tick % 5 !== 0) return; // SMS'i 5 saniyede bir sorgula
 
                     try {
                         var res = await fetch('/api/checkSms/' + id);
                         var data = await res.json();
                         if (data.success && data.status === 'completed') {
-                            clearInterval(activeTimerInterval);
-                            var codeEl = document.getElementById('smsCode');
-                            if (codeEl) codeEl.innerText = data.code;
-                            var actionArea = document.getElementById('actionButtons');
+                            clearInterval(orderTimers[id]); delete orderTimers[id];
+                            var codeEl = document.getElementById('smsCode_' + id);
+                            if (codeEl) { codeEl.innerText = data.code; codeEl.classList.remove('animate-pulse'); }
+                            var actionArea = document.getElementById('actionButtons_' + id);
                             if (actionArea) actionArea.innerHTML = '<span class="text-emerald-400 font-bold text-xs"><i class="fa-solid fa-check"></i> Tamamlandı</span>';
+                            var tEl = document.getElementById('timerDisplay_' + id);
+                            if (tEl) tEl.parentNode.innerHTML = '';
                             alert('SMS Kodunuz Geldi: ' + data.code);
                         }
                     } catch (e) {}
                 }, 1000);
             }
+
+            async function restoreOrders() {
+                if (!currentUser) return;
+                try {
+                    var res = await fetch('/api/myOrders?username=' + encodeURIComponent(currentUser));
+                    var data = await res.json();
+                    if (!data.success) return;
+                    data.orders.slice().reverse().forEach(function (o) {
+                        trackOrder(o.activationId, o.phoneNumber, o.remaining, o.productName, o.status === 'completed' ? o.code : null);
+                    });
+                } catch (e) {}
+            }
+
+            function cancelBtn(btn) { cancelOrder(btn.getAttribute('data-id'), false); }
 
             async function cancelOrder(id, isTimeout) {
                 if (!isTimeout && !confirm('Bu numarayı iptal etmek istediğinize emin misiniz? Bakiyeniz hesabınıza iade edilecektir.')) return;
@@ -794,8 +937,9 @@ app.get('/', (req, res) => {
                 alert(data.message);
                 fetchBalance();
                 if (data.success) {
-                    if (activeTimerInterval) clearInterval(activeTimerInterval);
-                    document.getElementById('activeOrderArea').innerHTML = '';
+                    if (orderTimers[id]) { clearInterval(orderTimers[id]); delete orderTimers[id]; }
+                    var card = document.getElementById('order_' + id);
+                    if (card) card.parentNode.removeChild(card);
                 }
             }
 
@@ -916,6 +1060,14 @@ app.get('/', (req, res) => {
                 }, 50);
             }
 
+            var phoenixCount = 0;
+            function phoenixHTML() {
+                var t = document.getElementById('phoenixTpl');
+                if (!t) return '';
+                phoenixCount++; // her kopyanın gradient/id'leri benzersiz olsun (gizli kopya diğerini bozmasın)
+                return t.innerHTML.replace(/(gFire|gWing|gTail|gGlow|ftW|ftT)/g, '$1_' + phoenixCount);
+            }
+
             var introClosed = false;
             function closeIntro() {
                 if (introClosed) return;
@@ -927,6 +1079,8 @@ app.get('/', (req, res) => {
             }
 
             function runIntro() {
+                var ip = document.getElementById('introPhoenix');
+                if (ip) ip.innerHTML = phoenixHTML();
                 var lines = ['> SİSTEM BAŞLATILIYOR...', '> GÜVENLİ BAĞLANTI KURULUYOR...', '> SAĞLAYICI AĞINA ERİŞİLİYOR...', '> ERİŞİM İZNİ VERİLDİ', '> ANKA KÜLLERİNDEN DOĞUYOR...', '> HOŞ GELDİN: ANKA SMS'];
                 var el = document.getElementById('introText');
                 var out = '', li = 0, ci = 0;
@@ -953,6 +1107,26 @@ app.get('/', (req, res) => {
     </html>
     `);
 });
+
+setInterval(async () => {
+    const now = Date.now();
+    for (const id in db.orders) {
+        const o = db.orders[id];
+        if (o.status !== 'waiting' || !o.createdAt || now - o.createdAt < 11 * 60 * 1000) continue;
+        o.sweepTries = (o.sweepTries || 0) + 1;
+        if (o.sweepTries > 5) { o.status = 'expired'; continue; }
+        try {
+            const st = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getStatus', id: id }, timeout: 15000 });
+            const t = String(st.data || '').trim();
+            if (t.startsWith('STATUS_OK')) { o.code = t.split(':').slice(1).join(':'); o.status = 'completed'; continue; }
+            const c = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'setStatus', status: 8, id: id }, timeout: 15000 });
+            if (String(c.data || '').trim().startsWith('ACCESS_CANCEL') && db.users[o.username]) {
+                db.users[o.username].balance += o.price;
+                o.status = 'cancelled';
+            }
+        } catch (e) {}
+    }
+}, 60000);
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, async () => {
