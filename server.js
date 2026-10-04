@@ -487,89 +487,51 @@ app.get('/', (req, res) => {
         </style>
     </head>
     <body class="text-slate-100 font-sans min-h-screen flex flex-col justify-between">
+        <canvas id="matrixCanvas"></canvas>
         <canvas id="emberCanvas"></canvas>
         <template id="phoenixTpl">
-            <svg viewBox="-30 -10 460 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Anka kuşu">
+            <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Anka amblemi">
             <defs>
-                <linearGradient id="gFire" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff6cf"/><stop offset=".4" stop-color="#ffb23f"/><stop offset=".75" stop-color="#f1591c"/><stop offset="1" stop-color="#a81810"/></linearGradient>
-                <linearGradient id="gWing" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff6cf"/><stop offset=".38" stop-color="#ffac34"/><stop offset=".72" stop-color="#ef4123"/><stop offset="1" stop-color="#7a1210"/></linearGradient>
-                <linearGradient id="gTail" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd271"/><stop offset=".5" stop-color="#f0501f"/><stop offset="1" stop-color="#7f1d1d" stop-opacity="0"/></linearGradient>
-                <radialGradient id="gGlow"><stop offset="0" stop-color="#ffb347" stop-opacity=".6"/><stop offset="1" stop-color="#ffb347" stop-opacity="0"/></radialGradient>
-                <radialGradient id="gEye" cx=".5" cy=".4" r=".65"><stop offset="0" stop-color="#fff6cf"/><stop offset=".55" stop-color="#ffb23f"/><stop offset="1" stop-color="#8a1a0c"/></radialGradient>
-                <filter id="glowF" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-                <path id="ftW" d="M0 0 C34 -9 90 -16 150 -10 C140 -4 128 2 150 10 C112 11 86 18 150 32 C106 24 84 30 112 46 C78 38 60 40 56 50 C34 38 14 22 0 0 Z"/>
-                <path id="ftT" d="M0 0 C-11 44 -9 102 0 152 C9 102 11 44 0 0 Z"/>
+                <linearGradient id="gBody" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eaffd6"/><stop offset=".45" stop-color="#4ade80"/><stop offset="1" stop-color="#065f46"/></linearGradient>
+                <linearGradient id="gWingR" x1="0" y1="0" x2="1" y2=".2"><stop offset="0" stop-color="#fff9db"/><stop offset=".4" stop-color="#facc15"/><stop offset=".75" stop-color="#22c55e"/><stop offset="1" stop-color="#064e3b"/></linearGradient>
+                <linearGradient id="gWingL" x1="0" y1="0" x2="1" y2=".2"><stop offset="0" stop-color="#fff9db"/><stop offset=".4" stop-color="#facc15"/><stop offset=".75" stop-color="#22c55e"/><stop offset="1" stop-color="#064e3b"/></linearGradient>
+                <filter id="eGlow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
             </defs>
-            <circle cx="200" cy="195" r="205" fill="url(#gGlow)"/>
-            <g class="emberLayer">
-                <circle class="ember" cx="88" cy="335" r="2.6" fill="#ffd271" style="animation-delay:.1s"/>
-                <circle class="ember" cx="128" cy="378" r="2.1" fill="#ffac34" style="animation-delay:1.2s"/>
-                <circle class="ember" cx="168" cy="350" r="2.8" fill="#fff3b0" style="animation-delay:2s"/>
-                <circle class="ember" cx="212" cy="390" r="2.1" fill="#ffd271" style="animation-delay:.5s"/>
-                <circle class="ember" cx="254" cy="348" r="2.6" fill="#ffac34" style="animation-delay:1.6s"/>
-                <circle class="ember" cx="298" cy="380" r="2.3" fill="#fff3b0" style="animation-delay:.3s"/>
-                <circle class="ember" cx="332" cy="322" r="2.2" fill="#ffd271" style="animation-delay:2.3s"/>
-                <circle class="ember" cx="58" cy="258" r="2" fill="#ffac34" style="animation-delay:1.4s"/>
-                <circle class="ember" cx="348" cy="250" r="2.4" fill="#fff3b0" style="animation-delay:.8s"/>
+            <polygon points="200,8 362,100 362,284 200,376 38,284 38,100" fill="none" stroke="#22c55e" stroke-opacity=".35" stroke-width="2"/>
+            <polygon points="200,34 338,112 338,272 200,350 62,272 62,112" fill="none" stroke="#facc15" stroke-opacity=".25" stroke-width="1" stroke-dasharray="6 7"/>
+            <g class="birdFloat" filter="url(#eGlow)">
+              <g transform="translate(200 185)"><g class="wingR">
+                <polygon points="0,0 150,-64 128,-28 150,-2 118,6 136,24 100,22 108,44 76,32 72,54 50,30 36,40" fill="url(#gWingR)" stroke="#eaffd6" stroke-opacity=".5" stroke-width="1.5"/>
+              </g></g>
+              <g transform="translate(200 185) scale(-1 1)"><g class="wingR">
+                <polygon points="0,0 150,-64 128,-28 150,-2 118,6 136,24 100,22 108,44 76,32 72,54 50,30 36,40" fill="url(#gWingL)" stroke="#eaffd6" stroke-opacity=".5" stroke-width="1.5"/>
+              </g></g>
+              <g transform="translate(200 220)"><g class="tailE">
+                <polygon points="0,0 -40,120 -14,70 0,150 14,70 40,120" fill="url(#gBody)" opacity=".9"/>
+              </g></g>
+              <polygon points="200,96 222,150 212,230 200,268 188,230 178,150" fill="url(#gBody)" stroke="#eaffd6" stroke-opacity=".6" stroke-width="1.5"/>
+              <polygon points="200,56 214,96 200,112 186,96" fill="#eaffd6"/>
+              <polygon points="200,34 207,58 200,70 193,58" fill="#facc15"/>
             </g>
-            <g class="birdFloat" filter="url(#glowF)">
-                <g transform="translate(200 230)"><g class="tailS">
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(-42) scale(.7)"/>
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(42) scale(.7)"/>
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(-28) scale(.86)"/>
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(28) scale(.86)"/>
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(-14) scale(.97)"/>
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(14) scale(.97)"/>
-                    <use href="#ftT" fill="url(#gTail)" transform="rotate(0) scale(1.04)"/>
-                </g></g>
-                <g transform="translate(214 142)"><g class="flapR">
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(-86) scale(.52)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(-70) scale(.68)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".35" stroke-width="1.2" transform="rotate(-54) scale(.82)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".4" stroke-width="1.2" transform="rotate(-38) scale(.93)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".45" stroke-width="1.2" transform="rotate(-22) scale(1)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".4" stroke-width="1.2" transform="rotate(-6) scale(.97)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".35" stroke-width="1.2" transform="rotate(10) scale(.87)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(25) scale(.7)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(38) scale(.52)"/>
-                </g></g>
-                <g transform="translate(186 142) scale(-1 1)"><g class="flapR">
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(-86) scale(.52)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(-70) scale(.68)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".35" stroke-width="1.2" transform="rotate(-54) scale(.82)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".4" stroke-width="1.2" transform="rotate(-38) scale(.93)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".45" stroke-width="1.2" transform="rotate(-22) scale(1)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".4" stroke-width="1.2" transform="rotate(-6) scale(.97)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".35" stroke-width="1.2" transform="rotate(10) scale(.87)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(25) scale(.7)"/>
-                    <use href="#ftW" fill="url(#gWing)" stroke="#fff6cf" stroke-opacity=".3" stroke-width="1.2" transform="rotate(38) scale(.52)"/>
-                </g></g>
-                <path d="M200 106 C170 114 160 158 176 202 C185 228 193 240 200 250 C207 240 215 228 224 202 C240 158 230 114 200 106 Z" fill="url(#gFire)"/>
-                <path d="M182 156 q18 14 36 0 M180 180 q20 15 40 0 M184 204 q16 13 32 0" fill="none" stroke="#fff6cf" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"/>
-                <path d="M200 106 C192 130 190 170 200 204" fill="none" stroke="#fff6cf" stroke-opacity=".4" stroke-width="1.6"/>
-                <path d="M200 66 C188 42 204 26 196 -6 C217 22 215 46 208 66 Z" fill="#fff3b0"/>
-                <path d="M187 74 C164 58 172 36 152 20 C182 30 196 50 196 74 Z" fill="#ffac34"/>
-                <path d="M213 74 C236 58 228 36 248 20 C218 30 204 50 204 74 Z" fill="#ffac34"/>
-                <path d="M200 84 C178 84 166 100 168 120 C170 140 184 154 200 156 C216 154 230 140 232 120 C234 100 222 84 200 84 Z" fill="url(#gFire)"/>
-                <path d="M172 104 C170 96 176 88 184 86" fill="none" stroke="#fff6cf" stroke-opacity=".5" stroke-width="1.6"/>
-                <path d="M190 116 L200 146 L210 116 C204 121 196 121 190 116 Z" fill="#ffd271" stroke="#7a1208" stroke-opacity=".35" stroke-width="1"/>
-                <path d="M179 104 C182 98 192 97 197 102 C191 106 184 108 179 104 Z" fill="url(#gEye)"/>
-                <path d="M221 104 C218 98 208 97 203 102 C209 106 216 108 221 104 Z" fill="url(#gEye)"/>
-                <path d="M179 104 C182 100 189 99 193 102" fill="none" stroke="#2a0a02" stroke-opacity=".5" stroke-width="1"/>
-                <path d="M221 104 C218 100 211 99 207 102" fill="none" stroke="#2a0a02" stroke-opacity=".5" stroke-width="1"/>
+            <g class="sparkLayer">
+              <circle class="spark" cx="130" cy="300" r="2.2" fill="#86efac" style="animation-delay:.2s"/>
+              <circle class="spark" cx="270" cy="300" r="2.2" fill="#fde047" style="animation-delay:1s"/>
+              <circle class="spark" cx="200" cy="330" r="2" fill="#86efac" style="animation-delay:1.8s"/>
+              <circle class="spark" cx="160" cy="60" r="1.8" fill="#fde047" style="animation-delay:.6s"/>
+              <circle class="spark" cx="245" cy="70" r="1.8" fill="#86efac" style="animation-delay:1.4s"/>
             </g>
             </svg>
         </template>
 
-        <div id="intro" style="position:fixed;inset:0;z-index:100;background:radial-gradient(ellipse at 50% 35%,#1d0c04 0%,#070301 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .9s ease;cursor:pointer" onclick="closeIntro()">
-            <div class="ring"></div>
-            <div class="ring2"></div>
-            <div id="introPhoenix" class="phoenixWrap" style="width:min(260px,62vw)"></div>
-            <h1 class="anka text-4xl md:text-5xl font-black tracking-widest mt-4">ANKA SMS</h1>
-            <p class="text-amber-200/60 text-xs font-mono mt-1 tracking-widest">KÜLLERİNDEN DOĞAN GÜVENLİ SİSTEM</p>
-            <div id="introLog" style="margin-top:22px;font-family:monospace;color:#fbbf24;font-size:13px;min-height:70px;text-align:center"></div>
-            <div style="margin-top:10px;width:260px;height:3px;background:rgba(251,191,36,.15);border-radius:4px;overflow:hidden"><div id="introBar" style="height:100%;width:0;background:linear-gradient(90deg,#fde68a,#f59e0b);transition:width .6s ease;box-shadow:0 0 10px #f59e0b"></div></div>
-            <p class="text-amber-200/30 text-[10px] mt-5">(geçmek için dokun)</p>
+        <div id="intro" style="position:fixed;inset:0;z-index:100;background:radial-gradient(ellipse at 50% 35%,rgba(4,21,12,.92) 0%,rgba(2,7,5,.96) 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .9s ease;cursor:pointer" onclick="closeIntro()">
+            <div class="ring" style="z-index:1"></div>
+            <div class="ring2" style="z-index:1"></div>
+            <div id="introPhoenix" class="phoenixWrap" style="width:min(260px,62vw);z-index:1"></div>
+            <h1 class="anka text-4xl md:text-5xl font-black tracking-widest mt-4" style="z-index:1">ANKA SMS</h1>
+            <p class="text-emerald-200/60 text-xs font-mono mt-1 tracking-widest" style="z-index:1">KÜLLERİNDEN DOĞAN GÜVENLİ SİSTEM</p>
+            <div id="introLog" style="z-index:1;margin-top:22px;font-family:monospace;color:#4ade80;font-size:13px;min-height:70px;text-align:center"></div>
+            <div style="z-index:1;margin-top:10px;width:260px;height:3px;background:rgba(74,222,128,.15);border-radius:4px;overflow:hidden"><div id="introBar" style="height:100%;width:0;background:linear-gradient(90deg,#facc15,#4ade80);transition:width .6s ease;box-shadow:0 0 10px #4ade80"></div></div>
+            <p class="text-emerald-200/30 text-[10px] mt-5" style="z-index:1">(geçmek için dokun)</p>
         </div>
 
         <div class="max-w-5xl mx-auto w-full p-4 relative z-10">
@@ -647,6 +609,38 @@ app.get('/', (req, res) => {
             var phoenixCount = 0;
 
             (function () {
+                // Yesil Matrix yagmuru arka plan
+                var c = document.getElementById('matrixCanvas');
+                var ctx = c.getContext('2d');
+                var cols, drops, fontSize = 16;
+                var chars = 'ANKASMS01アイウエオカキクケコサシスセソ0123456789ﾊﾋﾌﾍﾎﾗﾘﾟｳｴｵ'.split('');
+                function resize() {
+                    c.width = window.innerWidth; c.height = window.innerHeight;
+                    cols = Math.ceil(c.width / fontSize);
+                    drops = [];
+                    for (var i = 0; i < cols; i++) drops[i] = Math.random() * -100;
+                }
+                resize();
+                window.addEventListener('resize', resize);
+                function tickMatrix() {
+                    ctx.fillStyle = 'rgba(2,10,6,0.18)';
+                    ctx.fillRect(0, 0, c.width, c.height);
+                    ctx.font = fontSize + 'px monospace';
+                    for (var i = 0; i < drops.length; i++) {
+                        var ch = chars[Math.floor(Math.random() * chars.length)];
+                        var x = i * fontSize, y = drops[i] * fontSize;
+                        ctx.fillStyle = Math.random() > .93 ? '#eaffd6' : (Math.random() > .5 ? '#4ade80' : '#16a34a');
+                        ctx.fillText(ch, x, y);
+                        if (y > c.height && Math.random() > .975) drops[i] = 0;
+                        drops[i]++;
+                    }
+                    setTimeout(function () { requestAnimationFrame(tickMatrix); }, 45);
+                }
+                tickMatrix();
+            })();
+
+            (function () {
+                // Altin/yesil kivilcim parcaciklari (ust katman, hafif)
                 var c = document.getElementById('emberCanvas');
                 var ctx = c.getContext('2d');
                 var parts = [];
@@ -654,17 +648,17 @@ app.get('/', (req, res) => {
                 resize();
                 window.addEventListener('resize', resize);
                 function spawn() {
-                    if (parts.length > 140) return;
-                    parts.push({ x: Math.random() * c.width, y: c.height + 10, r: 1 + Math.random() * 2.4, vy: .4 + Math.random() * .9, vx: (Math.random() - .5) * .5, a: 0, life: 0, max: 160 + Math.random() * 160, hue: Math.random() > .5 ? '255,178,63' : '253,224,71' });
+                    if (parts.length > 90) return;
+                    parts.push({ x: Math.random() * c.width, y: c.height + 10, r: 1 + Math.random() * 2.2, vy: .4 + Math.random() * .9, vx: (Math.random() - .5) * .5, a: 0, life: 0, max: 160 + Math.random() * 160, hue: Math.random() > .5 ? '74,222,128' : '250,204,21' });
                 }
-                setInterval(spawn, 90);
+                setInterval(spawn, 140);
                 function tick() {
                     ctx.clearRect(0, 0, c.width, c.height);
                     for (var i = parts.length - 1; i >= 0; i--) {
                         var p = parts[i];
                         p.life++; p.y -= p.vy; p.x += p.vx + Math.sin(p.life * .05) * .3;
                         p.a = Math.sin((p.life / p.max) * Math.PI);
-                        ctx.beginPath(); ctx.fillStyle = 'rgba(' + p.hue + ',' + (p.a * .85) + ')'; ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+                        ctx.beginPath(); ctx.fillStyle = 'rgba(' + p.hue + ',' + (p.a * .8) + ')'; ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
                         if (p.life > p.max) parts.splice(i, 1);
                     }
                     requestAnimationFrame(tick);
@@ -676,7 +670,7 @@ app.get('/', (req, res) => {
                 var t = document.getElementById('phoenixTpl');
                 if (!t) return '';
                 phoenixCount++;
-                return t.innerHTML.replace(/(gFire|gWing|gTail|gGlow|gEye|glowF|ftW|ftT)/g, '$1_' + phoenixCount);
+                return t.innerHTML.replace(/(gBody|gWingR|gWingL|eGlow)/g, '$1_' + phoenixCount);
             }
 
             var introClosed = false;
