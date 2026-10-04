@@ -624,9 +624,10 @@ app.get('/', (req, res) => {
             <div style="padding:12px 14px;border-bottom:1px solid rgba(249,115,22,.25)">
                 <div style="display:flex;justify-content:space-between;align-items:center">
                     <span class="anka" style="font-weight:900;font-size:14px">CANLI DESTEK</span>
-                    <i class="fa-solid fa-xmark" style="cursor:pointer;color:#94a3b8" onclick="toggleSupport()"></i>
+                    <i class="fa-solid fa-xmark" style="cursor:pointer;color:#94a3b8;padding:6px;font-size:16px" onclick="closeSupportWindow()"></i>
                 </div>
-                <a id="supportContactLink" href="#" target="_blank" style="font-size:11px;color:#fbbf24;text-decoration:none">Telegram: @...</a>
+                <a id="supportContactLink" href="#" target="_blank" style="font-size:11px;color:#fbbf24;text-decoration:none;display:block">Telegram: @...</a>
+                <a id="supportContactWA" href="#" target="_blank" style="font-size:11px;color:#4ade80;text-decoration:none;display:block;margin-top:2px"><i class="fa-brands fa-whatsapp"></i> WhatsApp ile yaz</a>
             </div>
             <div id="supportMsgs" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;font-size:13px"></div>
             <div style="padding:10px;border-top:1px solid rgba(249,115,22,.25);display:flex;gap:6px">
