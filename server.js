@@ -5,13 +5,12 @@ const PORT = process.env.PORT || 10000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// HTML + CSS + JS İçeriği
 const htmlContent = `<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel - Bakiye Yükle</title>
+    <title>Bakiye Yükle</title>
     <style>
         :root {
             --primary-color: #00ff66;
@@ -120,20 +119,20 @@ const htmlContent = `<!DOCTYPE html>
 
     <div class="container">
         <h2>Bakiye Yükle</h2>
-        <form action="/bakiye-yukle" method="POST">
+        <form>
             <div class="form-group">
                 <label for="fullname">Ad Soyad</label>
-                <input type="text" id="fullname" name="fullname" placeholder="Adınızı ve soyadınızı girin" required>
+                <input type="text" id="fullname" name="fullname" placeholder="Adınızı ve soyadınızı girin">
             </div>
 
             <div class="form-group">
                 <label for="iban">IBAN Numarası</label>
-                <input type="text" id="iban" name="iban" placeholder="TR00 0000 0000 0000 0000 0000 00" required>
+                <input type="text" id="iban" name="iban" placeholder="TR00 0000 0000 0000 0000 0000 00">
             </div>
 
             <div class="form-group">
                 <label for="amount">Yüklenecek Tutar (TL)</label>
-                <input type="number" id="amount" name="amount" placeholder="0.00" step="0.01" required>
+                <input type="number" id="amount" name="amount" placeholder="0.00" step="0.01">
             </div>
 
             <button type="submit" class="btn">Bakiye Yükleme Talebi Oluştur</button>
@@ -187,19 +186,10 @@ const htmlContent = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// Ana Sayfa İstekleri
 app.get('/', (req, res) => {
     res.send(htmlContent);
 });
 
-// Form Gönderim İşlemi (Gerekirse backend mantığı eklenebilir)
-app.post('/bakiye-yukle', (req, res) => {
-    const { fullname, iban, amount } = req.body;
-    console.log(`Bakiye talebi alındı: ${fullname} - ${iban} - ${amount} TL`);
-    res.send(`<h2 style="color:#00ff66; background:#0a0a0a; padding:50px; text-align:center; font-family:monospace;">Talebiniz başarıyla alındı! <br><br><a href="/" style="color:#fff;">Geri Dön</a></h2>`);
-});
-
-// Sunucuyu Başlat
 app.listen(PORT, () => {
-    console.log(`Sunucu ${PORT} portunda aktif.`);
+    console.log(`Sunucu ${PORT} portunda çalışıyor.`);
 });
