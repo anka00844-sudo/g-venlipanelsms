@@ -279,10 +279,11 @@ app.post('/api/buyNumber', async (req, res) => {
         let usedCountry = candidates[0];
         let allRaw = [];
 
+        const ATTEMPTS_PER_COUNTRY = 4; // stok anlık yenilenebiliyor, her ülkede birkaç kez dene
         outer:
         for (const country of candidates) {
             usedCountry = country;
-            for (let attempt = 0; attempt < 2; attempt++) {
+            for (let attempt = 0; attempt < ATTEMPTS_PER_COUNTRY; attempt++) {
                 const resp = await axios.get(ONAYLI_SMS_URL, {
                     params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: item.serviceCode, country: country },
                     timeout: 30000
@@ -295,7 +296,7 @@ app.post('/api/buyNumber', async (req, res) => {
 
                 if (responseText.startsWith('ACCESS_NUMBER')) break outer;
                 if (responseText.startsWith('NO_NUMBERS')) {
-                    if (attempt < 1) await new Promise(r => setTimeout(r, 1100));
+                    if (attempt < ATTEMPTS_PER_COUNTRY - 1) await new Promise(r => setTimeout(r, 1500));
                     continue;
                 }
                 break outer; // bakiye/anahtar gibi başka bir hata -> başka ülkeyi denemenin anlamı yok
@@ -322,11 +323,11 @@ app.post('/api/buyNumber', async (req, res) => {
         if (showDetail) {
             msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [denenen ülkeler: ' + allRaw.join(' | ') + ']';
         } else if (key === 'NO_NUMBERS') {
-            msg = 'Bu ürün için şu an numara bulunamadı. Lütfen birkaç dakika sonra tekrar deneyin.';
+            msg = 'Bu ürün için şu an numara bulunamadı, otomatik tekrar deneniyor...';
         } else {
             msg = 'Şu an numara alınamıyor, lütfen daha sonra tekrar deneyin.';
         }
-        return res.json({ success: false, message: msg });
+        return res.json({ success: false, message: msg, retryable: key === 'NO_NUMBERS' });
     } catch (error) {
         console.error("API Bağlantı Hatası:", error.message);
         return res.json({ success: false, message: showDetail ? ("Sağlayıcı bağlantı hatası: " + error.message) : "Bağlantı hatası, lütfen tekrar deneyin." });
@@ -789,19 +790,25 @@ app.get('/', (req, res) => {
                     '</div>';
             }
 
-            async function buyNumber(btn) {
+            var MAX_AUTO_RETRY = 6;
+            async function buyNumber(btn, attemptNo) {
+                attemptNo = attemptNo || 1;
                 var productId = btn.getAttribute('data-id');
                 btn.disabled = true;
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Alınıyor...';
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> ' + (attemptNo > 1 ? 'Tekrar deneniyor (' + attemptNo + '/' + (MAX_AUTO_RETRY + 1) + ')...' : 'Alınıyor...');
                 try {
                     var res = await fetch('/api/buyNumber', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId: productId, username: currentUser }) });
                     var data = await res.json();
-                    btn.disabled = false;
-                    btn.innerText = 'Numara Al';
                     if (data.success) {
+                        btn.disabled = false;
+                        btn.innerText = 'Numara Al';
                         fetchBalance();
                         trackOrder(data.order.activationId, data.order.phoneNumber, 600, data.order.productName, null);
+                    } else if (data.retryable && attemptNo <= MAX_AUTO_RETRY) {
+                        setTimeout(function () { buyNumber(btn, attemptNo + 1); }, 2500);
                     } else {
+                        btn.disabled = false;
+                        btn.innerText = 'Numara Al';
                         alert(data.message);
                     }
                 } catch (e) {
