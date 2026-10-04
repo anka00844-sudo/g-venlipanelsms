@@ -8,7 +8,8 @@ app.use(bodyParser.json());
 // ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '8811977430';
-const ADMIN_TELEGRAM_USERNAME = process.env.ADMIN_TELEGRAM_USERNAME || 'vipankaa'; // destek için görünen tek iletişim kanalı
+const ADMIN_TELEGRAM_USERNAME = process.env.ADMIN_TELEGRAM_USERNAME || 'vipankaa'; // destek için görünen iletişim kanalı
+const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP || '573181006792'; // wa.me linki için ülke koduyla, başında + ve boşluk olmadan
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://yenipanel.onrender.com';
 const ONAYLI_SMS_API_KEY = process.env.ONAYLI_SMS_API_KEY || 'osms_7f193a3fe65448a9380061c1b56e9fdc29f49c67e89eb3dd';
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
@@ -224,7 +225,7 @@ app.get('/api/support/messages', (req, res) => {
     if (!db.users[username]) return res.json({ success: false, messages: [] });
     let list = db.support[username] || [];
     if (sinceTs) list = list.filter(m => m.ts > parseInt(sinceTs));
-    res.json({ success: true, messages: list, contact: ADMIN_TELEGRAM_USERNAME });
+    res.json({ success: true, messages: list, contact: ADMIN_TELEGRAM_USERNAME, whatsapp: ADMIN_WHATSAPP });
 });
 
 app.post('/api/admin/support/reply', async (req, res) => {
@@ -455,33 +456,34 @@ app.get('/', (req, res) => {
         <script src="https://cdn.tailwindcss.com"></script>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
-            body { background: radial-gradient(ellipse at 50% 20%, #2a1206 0%, #140804 42%, #040201 100%); }
+            body { background: radial-gradient(ellipse at 50% 20%, #04130a 0%, #030a06 42%, #010302 100%); }
             #emberCanvas { position: fixed; inset: 0; z-index: 0; }
-            .anka { background: linear-gradient(90deg,#fff3b0,#ffb23f,#ff5a1f,#ffb23f,#fff3b0); background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 4s linear infinite; }
+            #matrixCanvas { position: fixed; inset: 0; z-index: 0; opacity: .55; }
+            .anka { background: linear-gradient(90deg,#eaffd6,#4ade80,#16a34a,#4ade80,#eaffd6); background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 4s linear infinite; }
             @keyframes shimmer { to { background-position: 300% center; } }
-            .vipBadge { display: inline-block; margin-left: 8px; padding: 2px 10px; font-size: 11px; font-weight: 900; letter-spacing: 2px; color: #1a1000; background: linear-gradient(90deg,#fde68a,#f59e0b,#fde68a); background-size: 200% auto; border-radius: 6px; animation: shine 3s linear infinite; vertical-align: middle; box-shadow: 0 0 12px rgba(250,204,21,.5); }
+            .vipBadge { display: inline-block; margin-left: 8px; padding: 2px 10px; font-size: 11px; font-weight: 900; letter-spacing: 2px; color: #04170c; background: linear-gradient(90deg,#fde68a,#facc15,#fde68a); background-size: 200% auto; border-radius: 6px; animation: shine 3s linear infinite; vertical-align: middle; box-shadow: 0 0 12px rgba(74,222,128,.5); }
             @keyframes shine { to { background-position: 200% center; } }
-            .glassCard { background: rgba(20,10,5,.55); border: 1px solid rgba(255,178,63,.28); box-shadow: 0 0 60px rgba(249,115,22,.12), inset 0 0 40px rgba(255,178,63,.04); backdrop-filter: blur(10px); }
-            .ring { position: absolute; inset: -30px; border-radius: 50%; border: 1px solid rgba(255,178,63,.25); animation: spin 18s linear infinite; }
-            .ring2 { position: absolute; inset: -60px; border-radius: 50%; border: 1px dashed rgba(255,178,63,.15); animation: spin 28s linear infinite reverse; }
+            .glassCard { background: rgba(5,16,10,.55); border: 1px solid rgba(74,222,128,.28); box-shadow: 0 0 60px rgba(34,197,94,.12), inset 0 0 40px rgba(74,222,128,.04); backdrop-filter: blur(10px); }
+            .ring { position: absolute; inset: -30px; border-radius: 50%; border: 1px solid rgba(74,222,128,.25); animation: spin 18s linear infinite; }
+            .ring2 { position: absolute; inset: -60px; border-radius: 50%; border: 1px dashed rgba(250,204,21,.15); animation: spin 28s linear infinite reverse; }
             @keyframes spin { to { transform: rotate(360deg); } }
             .phoenixWrap { width: min(360px,78vw); margin: 0 auto; position: relative; }
-            .phoenixWrap svg { width: 100%; height: auto; display: block; filter: drop-shadow(0 0 28px rgba(249,115,22,.65)); }
-            .flapR { transform-origin: 0 0; animation: flap 1.5s ease-in-out infinite; }
-            @keyframes flap { 0%,100% { transform: rotate(15deg); } 50% { transform: rotate(-19deg); } }
+            .phoenixWrap svg { width: 100%; height: auto; display: block; filter: drop-shadow(0 0 28px rgba(74,222,128,.65)); }
+            .wingR { transform-origin: 0 0; animation: wingFlap 1.6s ease-in-out infinite; }
+            @keyframes wingFlap { 0%,100% { transform: rotate(6deg); } 50% { transform: rotate(-10deg); } }
             .birdFloat { animation: floaty 3.2s ease-in-out infinite; }
             @keyframes floaty { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
-            .tailS { transform-origin: 0 0; animation: sway 2.6s ease-in-out infinite alternate; }
-            @keyframes sway { from { transform: rotate(-6deg); } to { transform: rotate(6deg); } }
-            .ember { opacity: 0; animation: emberFloat 3s ease-in infinite; }
-            @keyframes emberFloat { 0% { opacity: 0; transform: translateY(0); } 18% { opacity: 1; } 100% { opacity: 0; transform: translateY(-95px); } }
+            .tailE { transform-origin: 0 0; animation: tailSway 2.8s ease-in-out infinite alternate; }
+            @keyframes tailSway { from { transform: rotate(-4deg); } to { transform: rotate(4deg); } }
+            .spark { opacity: 0; animation: sparkUp 2.6s ease-in infinite; }
+            @keyframes sparkUp { 0% { opacity: 0; transform: translateY(0); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(-70px); } }
             .fadeUp { animation: fadeUp 1.1s ease both; }
             @keyframes fadeUp { from { opacity: 0; transform: translateY(26px) scale(.96); } to { opacity: 1; transform: none; } }
             .blink { animation: blink 1s steps(2) infinite; }
             @keyframes blink { 50% { opacity: 0; } }
             .vipCard { border: 1px solid rgba(250,204,21,.45) !important; }
-            .bg-slate-900, .bg-slate-950 { background-color: rgba(10,6,4,.82) !important; }
-            header { backdrop-filter: blur(6px); box-shadow: 0 0 30px rgba(249,115,22,.12); }
+            .bg-slate-900, .bg-slate-950 { background-color: rgba(4,12,8,.82) !important; }
+            header { backdrop-filter: blur(6px); box-shadow: 0 0 30px rgba(34,197,94,.12); }
         </style>
     </head>
     <body class="text-slate-100 font-sans min-h-screen flex flex-col justify-between">
@@ -742,7 +744,7 @@ app.get('/', (req, res) => {
                         '<p class="text-amber-200/70 font-mono mb-8">Anlık sanal numara &bull; Hızlı SMS kodu &bull; 7/24 aktif<span class="blink">_</span></p>' +
                         '<div class="flex gap-3 justify-center"><button onclick="openAuthModal(\\'login\\')" class="bg-amber-600 hover:bg-amber-500 px-8 py-3 rounded-xl font-bold">Giriş Yap</button>' +
                         '<button onclick="openAuthModal(\\'register\\')" class="bg-black/40 border border-amber-500/40 hover:bg-amber-900/30 px-8 py-3 rounded-xl font-bold text-amber-300">Kayıt Ol</button></div>' +
-                        '<p class="text-amber-200/40 text-xs mt-6">Destek: Telegram <a href="https://t.me/vipankaa" target="_blank" class="text-amber-400 underline">@vipankaa</a></p>' +
+                        '<p class="text-amber-200/40 text-xs mt-6">Destek: Telegram <a href="https://t.me/vipankaa" target="_blank" class="text-amber-400 underline">@vipankaa</a> &bull; WhatsApp <a href="https://wa.me/573181006792" target="_blank" class="text-emerald-400 underline">+57 318 100 6792</a></p>' +
                         '</div>';
                 }
             }
@@ -936,13 +938,17 @@ app.get('/', (req, res) => {
 
             function toggleSupport() {
                 if (!currentUser) { openAuthModal('login'); return; }
-                supportOpen = !supportOpen;
-                document.getElementById('supportWindow').classList.toggle('hidden', !supportOpen);
-                if (supportOpen) {
-                    loadSupport();
-                    if (supportTimer) clearInterval(supportTimer);
-                    supportTimer = setInterval(loadSupport, 4000);
-                } else if (supportTimer) { clearInterval(supportTimer); supportTimer = null; }
+                if (supportOpen) { closeSupportWindow(); return; }
+                supportOpen = true;
+                document.getElementById('supportWindow').classList.remove('hidden');
+                loadSupport();
+                if (supportTimer) clearInterval(supportTimer);
+                supportTimer = setInterval(loadSupport, 4000);
+            }
+            function closeSupportWindow() {
+                supportOpen = false;
+                document.getElementById('supportWindow').classList.add('hidden');
+                if (supportTimer) { clearInterval(supportTimer); supportTimer = null; }
             }
             function renderSupportMsg(m) {
                 var mine = m.from === 'user';
@@ -956,6 +962,8 @@ app.get('/', (req, res) => {
                     if (!data.success) return;
                     var link = document.getElementById('supportContactLink');
                     if (link && data.contact) { link.textContent = 'Telegram: @' + data.contact; link.href = 'https://t.me/' + data.contact; }
+                    var wa = document.getElementById('supportContactWA');
+                    if (wa && data.whatsapp) wa.href = 'https://wa.me/' + data.whatsapp;
                     var box = document.getElementById('supportMsgs');
                     if (!box) return;
                     box.innerHTML = data.messages.map(renderSupportMsg).join('') || '<p style="color:#64748b;font-size:12px">Bir sorun mu var? Buradan yaz, en kısa sürede Telegram üzerinden dönüş yapılır.</p>';
