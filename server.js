@@ -1,4 +1,12 @@
-<!DOCTYPE html>
+const express = require('express');
+const path = require('path');
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+const htmlContent = `<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
@@ -6,7 +14,7 @@
     <title>Sistem Paneli</title>
     <style>
         :root {
-            --primary-color: #00ff66; /* Yeşil Tema */
+            --primary-color: #00ff66;
             --bg-dark: #0a0a0a;
             --card-bg: rgba(15, 25, 18, 0.85);
             --text-color: #e0e0e0;
@@ -28,7 +36,6 @@
             position: relative;
         }
 
-        /* Matrix Arka Plan Canvas */
         #matrix-canvas {
             position: fixed;
             top: 0;
@@ -38,7 +45,6 @@
             z-index: -1;
         }
 
-        /* Navigasyon / Header */
         header {
             background: var(--card-bg);
             border-bottom: 1px solid var(--border-color);
@@ -84,7 +90,6 @@
             padding-bottom: 10px;
         }
 
-        /* Ürünler Izgarası (Grid) */
         .products-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -128,7 +133,6 @@
             margin-bottom: 15px;
         }
 
-        /* Formlar ve Bakiye Bölümü */
         .balance-container {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -198,7 +202,6 @@
 
     <div class="main-container">
         
-        <!-- ÜRÜNLER BÖLÜMÜ -->
         <h2 id="urunler" class="section-title">Ürünler & Hizmetler</h2>
         <div class="products-grid">
             <div class="product-card">
@@ -214,7 +217,7 @@
 
             <div class="product-card">
                 <div>
-                    <div class="product-title">Premimum Paket</div>
+                    <div class="product-title">Premium Paket</div>
                     <div class="product-desc">Gelişmiş araçlar ve öncelikli destek seçeneği içerir.</div>
                 </div>
                 <div>
@@ -235,23 +238,22 @@
             </div>
         </div>
 
-        <!-- BAKİYE YÜKLE BÖLÜMÜ -->
         <h2 id="bakiye" class="section-title">Bakiye Yükle</h2>
         <div class="balance-container">
-            <form>
+            <form action="/bakiye-yukle" method="POST">
                 <div class="form-group">
                     <label for="fullname">Ad Soyad</label>
-                    <input type="text" id="fullname" placeholder="Adınızı ve soyadınızı girin">
+                    <input type="text" id="fullname" name="fullname" placeholder="Adınızı ve soyadınızı girin" required>
                 </div>
 
                 <div class="form-group">
                     <label for="iban">IBAN Numarası</label>
-                    <input type="text" id="iban" placeholder="TR00 0000 0000 0000 0000 0000 00">
+                    <input type="text" id="iban" name="iban" placeholder="TR00 0000 0000 0000 0000 0000 00" required>
                 </div>
 
                 <div class="form-group">
                     <label for="amount">Yüklenecek Tutar (TL)</label>
-                    <input type="number" id="amount" placeholder="0.00">
+                    <input type="number" id="amount" name="amount" placeholder="0.00" step="0.01" required>
                 </div>
 
                 <button type="submit" class="btn">Bakiye Yükleme Talebi Oluştur</button>
@@ -261,7 +263,6 @@
     </div>
 
     <script>
-        // Matrix Yağmuru Efekti
         const canvas = document.getElementById('matrix-canvas');
         const ctx = canvas.getContext('2d');
 
@@ -306,4 +307,18 @@
         });
     </script>
 </body>
-</html>
+</html>`;
+
+app.get('/', (req, res) => {
+    res.send(htmlContent);
+});
+
+app.post('/bakiye-yukle', (req, res) => {
+    const { fullname, iban, amount } = req.body;
+    console.log(`Bakiye talebi: ${fullname} | ${iban} | ${amount} TL`);
+    res.send(`<h2 style="color:#00ff66; background:#0a0a0a; padding:50px; text-align:center; font-family:monospace;">Talebiniz alındı! <br><br><a href="/" style="color:#fff;">Geri Dön</a></h2>`);
+});
+
+app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
