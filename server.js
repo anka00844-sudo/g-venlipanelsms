@@ -1,12 +1,20 @@
-<!DOCTYPE html>
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// HTML + CSS + JS İçeriği
+const htmlContent = `<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel</title>
+    <title>Panel - Bakiye Yükle</title>
     <style>
         :root {
-            --primary-color: #00ff66; /* Sarı yerine Yeşil tema */
+            --primary-color: #00ff66;
             --bg-dark: #0a0a0a;
             --card-bg: rgba(15, 25, 18, 0.85);
             --text-color: #e0e0e0;
@@ -31,7 +39,6 @@
             position: relative;
         }
 
-        /* Matrix Arka Plan Canvas */
         #matrix-canvas {
             position: fixed;
             top: 0;
@@ -44,7 +51,7 @@
         .container {
             width: 100%;
             max-width: 500px;
-            padding: 20px;
+            padding: 25px;
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             box-shadow: 0 0 15px rgba(0, 255, 102, 0.2);
@@ -97,6 +104,7 @@
             transition: 0.3s;
             border-radius: 4px;
             text-transform: uppercase;
+            margin-top: 10px;
         }
 
         .btn:hover {
@@ -112,20 +120,20 @@
 
     <div class="container">
         <h2>Bakiye Yükle</h2>
-        <form>
+        <form action="/bakiye-yukle" method="POST">
             <div class="form-group">
                 <label for="fullname">Ad Soyad</label>
-                <input type="text" id="fullname" placeholder="Adınızı ve soyadınızı girin">
+                <input type="text" id="fullname" name="fullname" placeholder="Adınızı ve soyadınızı girin" required>
             </div>
 
             <div class="form-group">
                 <label for="iban">IBAN Numarası</label>
-                <input type="text" id="iban" placeholder="TR00 0000 0000 0000 0000 0000 00">
+                <input type="text" id="iban" name="iban" placeholder="TR00 0000 0000 0000 0000 0000 00" required>
             </div>
 
             <div class="form-group">
                 <label for="amount">Yüklenecek Tutar (TL)</label>
-                <input type="number" id="amount" placeholder="0.00">
+                <input type="number" id="amount" name="amount" placeholder="0.00" step="0.01" required>
             </div>
 
             <button type="submit" class="btn">Bakiye Yükleme Talebi Oluştur</button>
@@ -133,7 +141,6 @@
     </div>
 
     <script>
-        // Matrix Yağmuru Efekti
         const canvas = document.getElementById('matrix-canvas');
         const ctx = canvas.getContext('2d');
 
@@ -146,7 +153,6 @@
 
         const fontSize = 16;
         const columns = canvas.width / fontSize;
-
         const rainDrops = [];
 
         for (let x = 0; x < columns; x++) {
@@ -179,4 +185,21 @@
         });
     </script>
 </body>
-</html>
+</html>`;
+
+// Ana Sayfa İstekleri
+app.get('/', (req, res) => {
+    res.send(htmlContent);
+});
+
+// Form Gönderim İşlemi (Gerekirse backend mantığı eklenebilir)
+app.post('/bakiye-yukle', (req, res) => {
+    const { fullname, iban, amount } = req.body;
+    console.log(`Bakiye talebi alındı: ${fullname} - ${iban} - ${amount} TL`);
+    res.send(`<h2 style="color:#00ff66; background:#0a0a0a; padding:50px; text-align:center; font-family:monospace;">Talebiniz başarıyla alındı! <br><br><a href="/" style="color:#fff;">Geri Dön</a></h2>`);
+});
+
+// Sunucuyu Başlat
+app.listen(PORT, () => {
+    console.log(`Sunucu ${PORT} portunda aktif.`);
+});
