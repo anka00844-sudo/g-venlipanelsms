@@ -52,14 +52,21 @@ const SERVICE_INFO = {
     wa: { name: 'WhatsApp', icon: 'fa-whatsapp', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
     tg: { name: 'Telegram', icon: 'fa-telegram', bg: 'bg-blue-500/10', color: 'text-blue-400' }
 };
+// Türkçe karakterleri sadeleştirip küçük harfe çevirir (ş/ı/ğ/ü/ö/ç eşleşme sorunlarını önler)
+function normTr(s) {
+    return String(s).toLowerCase()
+        .replace(/ı/g, 'i').replace(/İ/g, 'i').replace(/ş/g, 's').replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c').trim();
+}
 function nameHas(key, n) {
-    if (key === 'tr') return n.includes('turkey') || n.includes('türkiye') || n.includes('turkiye') || n.includes('турци');
-    if (key === 'ph') return n.includes('philippines') || n.includes('филиппин');
-    if (key === 'us') return /\busa\b/.test(n) || n.includes('united states') || n.includes('сша');
+    const t = normTr(n);
+    if (key === 'tr') return t.includes('turkey') || t.includes('turkiye') || t.includes('турци') || /^tr$/.test(t) || t === 'turkiye cumhuriyeti';
+    if (key === 'ph') return t.includes('philippines') || t.includes('филиппин') || t.includes('filipin');
+    if (key === 'us') return /\busa\b/.test(t) || t.includes('united states') || t.includes('сша') || t.includes('amerika birlesik');
     return false;
 }
 
-// ====== Sağlayıcıdan ülke ID'lerini otomatik bul (1 saatte bir yenile) ======
+// ====== Sağlayıcıdan ülke ID'lerini otomatik bul (isme göre - 1 saatte bir yenile) ======
 let countryCache = { time: 0, map: {}, all: {} };
 async function resolveCountries() {
     if (countryCache.time && Date.now() - countryCache.time < 3600000) return countryCache;
@@ -75,26 +82,62 @@ async function resolveCountries() {
                 if (!c || typeof c !== 'object') continue;
                 const id = c.id !== undefined ? String(c.id) : (c._k !== undefined ? String(c._k) : null);
                 if (id === null) continue;
-                const names = [c.eng, c.rus, c.name, c.title, c.tr, c.country].filter(Boolean).map(x => String(x).toLowerCase().trim());
+                // Alan adı ne olursa olsun objedeki TÜM string değerleri tara (sağlayıcıya göre alan adları değişebilir)
+                const names = Object.values(c).filter(v => typeof v === 'string' || typeof v === 'number').map(x => String(x).toLowerCase().trim());
                 for (const key in all) {
                     if (names.some(n => nameHas(key, n))) { if (!map[key]) map[key] = id; if (!all[key].includes(id)) all[key].push(id); }
                 }
             }
         }
-    } catch (e) {}
+    } catch (e) { console.error('[resolveCountries] hata:', e.message); }
     countryCache = { time: Date.now(), map, all };
     return countryCache;
 }
-// Bir ürün için denenecek ülke ID listesi: sağlayıcıdan otomatik bulunan + varsayılan + elle eklenen alternatifler
+
+// ====== Sağlayıcıdan servis bazlı CANLI fiyat/stok bilgisi (ülke ID -> {cost,count}) - 45sn cache ======
+let priceCache = {}; // serviceCode -> { time, data: { countryId: {cost,count} } }
+async function fetchServicePrices(serviceCode) {
+    const cached = priceCache[serviceCode];
+    if (cached && Date.now() - cached.time < 45000) return cached.data;
+    const out = {};
+    try {
+        const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getPrices', service: serviceCode }, timeout: 15000 });
+        let d = r.data;
+        if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
+        if (d && typeof d === 'object') {
+            for (const cid in d) {
+                const v = d[cid];
+                if (!v) continue;
+                const svc = (v[serviceCode] !== undefined) ? v[serviceCode] : v;
+                if (svc && typeof svc === 'object' && svc.count !== undefined) {
+                    out[cid] = { cost: Number(svc.cost) || 0, count: Number(svc.count) || 0 };
+                }
+            }
+        }
+    } catch (e) { console.error('[fetchServicePrices] hata:', e.message); }
+    priceCache[serviceCode] = { time: Date.now(), data: out };
+    return out;
+}
+
+// Bir ürün için denenecek ülke ID listesi: isimle bulunan adaylar + CANLI stok bilgisine göre sıralama
+// Stokta (count>0) olanlar en öne gelir, böylece hem zaman kaybı hem de yanlış ülke denemesi azalır.
 async function countryCandidates(item) {
     const { map, all } = await resolveCountries();
-    const list = [];
+    const nameList = [];
     const primary = map[item.key] || item.defCountry;
-    list.push(primary);
-    (all[item.key] || []).forEach(id => { if (!list.includes(id)) list.push(id); });
-    (item.alt || []).forEach(id => { if (!list.includes(id)) list.push(id); });
-    if (!list.includes(item.defCountry)) list.push(item.defCountry);
-    return list;
+    nameList.push(primary);
+    (all[item.key] || []).forEach(id => { if (!nameList.includes(id)) nameList.push(id); });
+    (item.alt || []).forEach(id => { if (!nameList.includes(id)) nameList.push(id); });
+    if (!nameList.includes(item.defCountry)) nameList.push(item.defCountry);
+
+    const prices = await fetchServicePrices(item.serviceCode);
+    const withStock = nameList.filter(id => prices[id] && prices[id].count > 0)
+        .sort((a, b) => (prices[b].count - prices[a].count));
+    const withoutInfo = nameList.filter(id => !prices[id]);
+    const noStock = nameList.filter(id => prices[id] && prices[id].count === 0);
+    // Öncelik: stoğu bilinen > bilgi yok (sağlayıcı yanıt vermediyse eski sıralama) > stoğu 0 görünen (yine de son çare dene, anlık değişebilir)
+    const ordered = [...withStock, ...withoutInfo, ...noStock];
+    return ordered.length ? ordered : nameList;
 }
 
 // ====== SERVİS LİSTESİ (sabit katalog, stok yazısı yok) ======
@@ -550,9 +593,9 @@ app.get('/', (req, res) => {
             <main id="mainContent"></main>
         </div>
 
-        <div id="authModal" class="fixed inset-0 bg-black/85 flex items-center justify-center hidden z-50">
-            <div class="glassCard p-8 rounded-3xl w-full max-w-md relative shadow-2xl">
-                <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+        <div id="authModal" class="fixed inset-0 bg-black/85 flex items-center justify-center hidden z-50" onclick="if(event.target===this) closeAuthModal()">
+            <div class="glassCard p-8 rounded-3xl w-full max-w-md relative shadow-2xl" onclick="event.stopPropagation()">
+                <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white" style="z-index:5"><i class="fa-solid fa-xmark text-xl"></i></button>
                 <div class="text-center mb-6"><h2 id="authTitle" class="text-2xl font-black text-white">Giriş Yap</h2></div>
                 <div class="space-y-4">
                     <input type="text" id="authUsername" placeholder="Kullanıcı Adı" class="w-full bg-black/40 border border-amber-500/20 rounded-xl p-3 text-white focus:border-amber-500">
@@ -563,9 +606,9 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <div id="depositModal" class="fixed inset-0 bg-black/85 flex items-center justify-center hidden z-50">
-            <div class="glassCard p-8 rounded-3xl w-full max-w-md relative shadow-2xl">
-                <button onclick="closeDeposit()" class="absolute top-4 right-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+        <div id="depositModal" class="fixed inset-0 bg-black/85 flex items-center justify-center hidden z-50" onclick="if(event.target===this) closeDeposit()">
+            <div class="glassCard p-8 rounded-3xl w-full max-w-md relative shadow-2xl" onclick="event.stopPropagation()">
+                <button onclick="closeDeposit()" class="absolute top-4 right-4 text-slate-400 hover:text-white" style="z-index:5"><i class="fa-solid fa-xmark text-xl"></i></button>
                 <h2 class="text-xl font-black mb-4 text-amber-400"><i class="fa-solid fa-wallet"></i> Bakiye Yükle (IBAN)</h2>
                 <div class="space-y-4 text-sm text-slate-300">
                     <div class="bg-black/40 p-4 rounded-xl border border-amber-500/20">
@@ -581,10 +624,10 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <div id="supportBubble" onclick="toggleSupport()" style="position:fixed;bottom:22px;right:22px;z-index:60;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 0 22px rgba(249,115,22,.55)">
-            <i class="fa-solid fa-headset text-white text-xl"></i>
+        <div id="supportBubble" onclick="toggleSupport()" style="position:fixed;bottom:22px;right:22px;z-index:70;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 0 22px rgba(249,115,22,.55)">
+            <i id="supportBubbleIcon" class="fa-solid fa-headset text-white text-xl"></i>
         </div>
-        <div id="supportWindow" class="hidden" style="position:fixed;bottom:90px;right:22px;z-index:60;width:320px;max-width:88vw;height:440px;background:rgba(10,5,3,.97);border:1px solid rgba(249,115,22,.4);border-radius:18px;box-shadow:0 0 40px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden">
+        <div id="supportWindow" class="hidden" style="position:fixed;bottom:90px;right:22px;z-index:65;width:320px;max-width:calc(100vw - 24px);height:440px;max-height:min(440px,70vh);background:rgba(10,5,3,.97);border:1px solid rgba(249,115,22,.4);border-radius:18px;box-shadow:0 0 40px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box">
             <div style="padding:12px 14px;border-bottom:1px solid rgba(249,115,22,.25)">
                 <div style="display:flex;justify-content:space-between;align-items:center">
                     <span class="anka" style="font-weight:900;font-size:14px">CANLI DESTEK</span>
@@ -931,10 +974,12 @@ app.get('/', (req, res) => {
             }
 
             function toggleSupport() {
-                if (!currentUser) { openAuthModal('login'); return; }
                 if (supportOpen) { closeSupportWindow(); return; }
+                if (!currentUser) { openAuthModal('login'); return; }
                 supportOpen = true;
                 document.getElementById('supportWindow').classList.remove('hidden');
+                var ic = document.getElementById('supportBubbleIcon');
+                if (ic) { ic.classList.remove('fa-headset'); ic.classList.add('fa-xmark'); }
                 loadSupport();
                 if (supportTimer) clearInterval(supportTimer);
                 supportTimer = setInterval(loadSupport, 4000);
@@ -942,6 +987,8 @@ app.get('/', (req, res) => {
             function closeSupportWindow() {
                 supportOpen = false;
                 document.getElementById('supportWindow').classList.add('hidden');
+                var ic = document.getElementById('supportBubbleIcon');
+                if (ic) { ic.classList.remove('fa-xmark'); ic.classList.add('fa-headset'); }
                 if (supportTimer) { clearInterval(supportTimer); supportTimer = null; }
             }
             function renderSupportMsg(m) {
