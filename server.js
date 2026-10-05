@@ -16,6 +16,25 @@ const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
 // Sağlayıcı bakiyesi bu değerin altına düşünce Telegram'dan otomatik uyarı gelir
 const LOW_BALANCE_THRESHOLD = parseFloat(process.env.LOW_BALANCE_THRESHOLD || '50');
 
+// ====== Sağlayıcıya TEK SIRADAN istek atan kuyruk (TOO_MANY_REQUESTS'i kökten önlemek için) ======
+// Aynı anda birden fazla fonksiyon (fiyat kontrolü, ülke listesi, bakiye, getNumber...) sağlayıcıya
+// istek atabiliyor; bunlar üst üste binerse sağlayıcı "çok fazla istek" diyip engelliyor.
+// Bu yüzden TÜM sağlayıcı istekleri burada sıraya alınır ve aralarında en az PROVIDER_MIN_INTERVAL_MS kadar süre bırakılır.
+const PROVIDER_MIN_INTERVAL_MS = 2200;
+let providerQueue = Promise.resolve();
+let lastProviderCallAt = 0;
+function providerGet(params, timeout) {
+    const run = providerQueue.then(async () => {
+        const wait = PROVIDER_MIN_INTERVAL_MS - (Date.now() - lastProviderCallAt);
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+        lastProviderCallAt = Date.now();
+        return axios.get(ONAYLI_SMS_URL, { params: Object.assign({ api_key: ONAYLI_SMS_API_KEY }, params), timeout: timeout || 20000 });
+    });
+    // Zincirin bir istek hata verirse kopmaması için ayrı bir "kuyruk ilerleticisi" tutuyoruz
+    providerQueue = run.then(() => {}, () => {});
+    return run;
+}
+
 let db = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
@@ -28,11 +47,35 @@ let db = {
 };
 let supportMsgMap = {}; // telegram mesaj id -> username (adminin hangi mesaja cevap verdiğini eşlemek için)
 
+// Ziyaretçinin nereden geldiğini (hangi platform) tahmin eder: önce ?src= / ?utm_source= parametresi,
+// yoksa Referer (hangi siteden tıklayıp geldi) başlığına bakar.
+function guessSource(req) {
+    const q = (req.query && (req.query.src || req.query.utm_source || req.query.ref) || '').toLowerCase();
+    if (q) {
+        if (q.includes('telegram') || q === 'tg') return 'Telegram';
+        if (q.includes('whatsapp') || q === 'wa') return 'WhatsApp';
+        if (q.includes('facebook') || q === 'fb') return 'Facebook';
+        if (q.includes('instagram') || q === 'ig') return 'Instagram';
+        return q.charAt(0).toUpperCase() + q.slice(1);
+    }
+    const ref = (req.headers['referer'] || req.headers['referrer'] || '').toLowerCase();
+    if (!ref) return 'Direkt / Bilinmiyor';
+    if (ref.includes('facebook.com') || ref.includes('fb.com')) return 'Facebook';
+    if (ref.includes('t.me') || ref.includes('telegram.org')) return 'Telegram';
+    if (ref.includes('wa.me') || ref.includes('whatsapp.com')) return 'WhatsApp';
+    if (ref.includes('instagram.com')) return 'Instagram';
+    if (ref.includes('tiktok.com')) return 'TikTok';
+    if (ref.includes('google.')) return 'Google';
+    if (ref.includes('twitter.com') || ref.includes('x.com')) return 'Twitter/X';
+    if (ref.includes(RENDER_EXTERNAL_URL.replace(/^https?:\/\//, ''))) return 'Direkt / Bilinmiyor';
+    try { return new URL(req.headers['referer']).hostname; } catch (e) { return 'Direkt / Bilinmiyor'; }
+}
+
 app.use((req, res, next) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (!db.visitors.some(v => v.ip === ip)) {
-        db.visitors.unshift({ ip, time: new Date().toLocaleString('tr-TR') });
-        if (db.visitors.length > 80) db.visitors.pop();
+        db.visitors.unshift({ ip, time: new Date().toLocaleString('tr-TR'), source: guessSource(req), path: req.path });
+        if (db.visitors.length > 150) db.visitors.pop();
     }
     next();
 });
@@ -75,7 +118,7 @@ async function resolveServicesList() {
     if (servicesListCache.time && Date.now() - servicesListCache.time < 3600000) return servicesListCache;
     const byCode = {};
     try {
-        const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getServicesList' }, timeout: 15000 });
+        const r = await providerGet({ action: 'getServicesList' }, 15000);
         let d = r.data;
         if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
         let arr = [];
@@ -135,7 +178,7 @@ async function resolveCountries() {
     const map = {};
     const all = { tr: [], ph: [], us: [] };
     try {
-        const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getCountries' }, timeout: 15000 });
+        const r = await providerGet({ action: 'getCountries' }, 15000);
         let d = r.data;
         if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
         if (d && typeof d === 'object') {
@@ -163,7 +206,7 @@ async function fetchServicePrices(serviceCode) {
     if (cached && Date.now() - cached.time < 45000) return cached.data;
     const out = {};
     try {
-        const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getPrices', service: serviceCode }, timeout: 15000 });
+        const r = await providerGet({ action: 'getPrices', service: serviceCode }, 15000);
         let d = r.data;
         if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
         if (d && typeof d === 'object') {
@@ -241,7 +284,9 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (db.users[username] && db.users[username].password === password) {
-        db.logins.unshift({ username, ip, time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
+        const visitorRec = db.visitors.find(v => v.ip === ip);
+        const source = (visitorRec && visitorRec.source) || 'Bilinmiyor';
+        db.logins.unshift({ username, ip, source, time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
         if (db.logins.length > 300) db.logins.length = 300;
         res.json({ success: true, username, role: db.users[username].role });
     } else {
@@ -286,8 +331,9 @@ app.get('/api/admin/getData', (req, res) => {
     const logins = db.logins.slice(0, 100);
     const orders = Object.values(db.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 100);
     const supportChats = Object.keys(db.support).map(u => ({ username: u, last: db.support[u][db.support[u].length - 1], count: db.support[u].length })).sort((a, b) => (b.last ? b.last.ts : 0) - (a.last ? a.last.ts : 0));
+    const visitorList = db.visitors.slice(0, 100);
 
-    res.json({ success: true, users, payments, logins, orders, supportChats, visitors: db.visitors.length });
+    res.json({ success: true, users, payments, logins, orders, supportChats, visitors: db.visitors.length, visitorList });
 });
 
 app.post('/api/admin/processPayment', (req, res) => {
@@ -631,6 +677,10 @@ app.get('/', (req, res) => {
             .ring { position: absolute; inset: -30px; border-radius: 50%; border: 1px solid rgba(74,222,128,.25); animation: spin 18s linear infinite; }
             .ring2 { position: absolute; inset: -60px; border-radius: 50%; border: 1px dashed rgba(250,204,21,.15); animation: spin 28s linear infinite reverse; }
             @keyframes spin { to { transform: rotate(360deg); } }
+            .introStage { opacity: 0; transform: translateY(22px) scale(.94); animation: introIn 1s cubic-bezier(.16,.84,.44,1) forwards; }
+            @keyframes introIn { to { opacity: 1; transform: none; } }
+            .introFlash { position: absolute; inset: 0; background: radial-gradient(circle at 50% 45%, rgba(74,222,128,.55) 0%, rgba(74,222,128,0) 60%); animation: flashOut 1.4s ease-out forwards; pointer-events: none; }
+            @keyframes flashOut { 0% { opacity: 1; transform: scale(.3); } 100% { opacity: 0; transform: scale(2.2); } }
             .phoenixWrap { width: min(360px,78vw); margin: 0 auto; position: relative; }
             .phoenixWrap svg { width: 100%; height: auto; display: block; filter: drop-shadow(0 0 28px rgba(74,222,128,.65)); }
             .wingR { transform-origin: 0 0; animation: wingFlap 1.6s ease-in-out infinite; }
@@ -687,15 +737,17 @@ app.get('/', (req, res) => {
             </svg>
         </template>
 
-        <div id="intro" style="position:fixed;inset:0;z-index:100;background:radial-gradient(ellipse at 50% 35%,rgba(4,21,12,.92) 0%,rgba(2,7,5,.96) 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .9s ease;cursor:pointer" onclick="closeIntro()">
-            <div class="ring" style="z-index:1"></div>
-            <div class="ring2" style="z-index:1"></div>
-            <div id="introPhoenix" class="phoenixWrap" style="width:min(260px,62vw);z-index:1"></div>
-            <h1 class="anka text-4xl md:text-5xl font-black tracking-widest mt-4" style="z-index:1">ANKA SMS</h1>
-            <p class="text-emerald-200/60 text-xs font-mono mt-1 tracking-widest" style="z-index:1">KÜLLERİNDEN DOĞAN GÜVENLİ SİSTEM</p>
-            <div id="introLog" style="z-index:1;margin-top:22px;font-family:monospace;color:#4ade80;font-size:13px;min-height:70px;text-align:center"></div>
-            <div style="z-index:1;margin-top:10px;width:260px;height:3px;background:rgba(74,222,128,.15);border-radius:4px;overflow:hidden"><div id="introBar" style="height:100%;width:0;background:linear-gradient(90deg,#facc15,#4ade80);transition:width .6s ease;box-shadow:0 0 10px #4ade80"></div></div>
-            <p class="text-emerald-200/30 text-[10px] mt-5" style="z-index:1">(geçmek için dokun)</p>
+        <div id="intro" style="position:fixed;inset:0;z-index:100;background:radial-gradient(ellipse at 50% 35%,rgba(4,21,12,.92) 0%,rgba(2,7,5,.96) 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .9s ease;cursor:pointer;overflow:hidden" onclick="closeIntro()">
+            <div class="introFlash"></div>
+            <div class="ring introStage" style="z-index:1;animation-delay:.05s"></div>
+            <div class="ring2 introStage" style="z-index:1;animation-delay:.05s"></div>
+            <span class="vipBadge introStage" style="z-index:1;animation-delay:.15s;letter-spacing:3px">VIP ERİŞİM</span>
+            <div id="introPhoenix" class="phoenixWrap introStage" style="width:min(260px,62vw);z-index:1;animation-delay:.3s"></div>
+            <h1 class="anka text-4xl md:text-6xl font-black tracking-widest mt-4 introStage" style="z-index:1;animation-delay:.55s">ANKA SMS</h1>
+            <p class="text-emerald-200/60 text-xs font-mono mt-1 tracking-widest introStage" style="z-index:1;animation-delay:.7s">KÜLLERİNDEN DOĞAN GÜVENLİ SİSTEM</p>
+            <div id="introLog" class="introStage" style="z-index:1;animation-delay:.85s;margin-top:22px;font-family:monospace;color:#4ade80;font-size:13px;min-height:70px;text-align:center"></div>
+            <div class="introStage" style="z-index:1;animation-delay:.85s;margin-top:10px;width:260px;height:3px;background:rgba(74,222,128,.15);border-radius:4px;overflow:hidden"><div id="introBar" style="height:100%;width:0;background:linear-gradient(90deg,#facc15,#4ade80);transition:width .6s ease;box-shadow:0 0 10px #4ade80"></div></div>
+            <p class="text-emerald-200/30 text-[10px] mt-5 introStage" style="z-index:1;animation-delay:1s">(geçmek için dokun)</p>
         </div>
 
         <div class="max-w-5xl mx-auto w-full p-4 relative z-10">
@@ -1107,9 +1159,14 @@ app.get('/', (req, res) => {
                 }).join('') + '</div>';
 
                 var loginsHtml = '<div class="max-h-56 overflow-y-auto space-y-1">' + data.logins.map(function (l) {
-                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex justify-between"><span class="font-bold text-white">' + l.username + '</span><span class="text-slate-400 font-mono">' + l.ip + '</span><span class="text-slate-500">' + l.time + '</span></div>';
+                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap justify-between gap-1"><span class="font-bold text-white">' + l.username + '</span><span class="text-slate-400 font-mono">' + l.ip + '</span><span class="text-emerald-400">' + (l.source || '-') + '</span><span class="text-slate-500">' + l.time + '</span></div>';
                 }).join('') + '</div>';
                 if (!data.logins.length) loginsHtml = '<p class="text-sm text-slate-500">Henüz giriş kaydı yok.</p>';
+
+                var visitorsHtml = '<div class="max-h-56 overflow-y-auto space-y-1">' + (data.visitorList || []).map(function (v) {
+                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap justify-between gap-1"><span class="text-slate-400 font-mono">' + v.ip + '</span><span class="text-emerald-400 font-bold">' + v.source + '</span><span class="text-slate-500">' + v.time + '</span></div>';
+                }).join('') + '</div>';
+                if (!data.visitorList || !data.visitorList.length) visitorsHtml = '<p class="text-sm text-slate-500">Henüz ziyaretçi kaydı yok.</p>';
 
                 var ordersHtml = '<div class="max-h-56 overflow-y-auto space-y-1">' + data.orders.map(function (o) {
                     return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex justify-between"><span class="font-bold text-white">' + o.username + '</span><span>' + o.productName + '</span><span class="font-mono">' + o.phoneNumber + '</span><span class="text-slate-500">' + o.status + '</span><span class="text-slate-500">' + o.time + '</span></div>';
@@ -1124,15 +1181,26 @@ app.get('/', (req, res) => {
                 }).join('') + '</div>';
                 if (!data.supportChats.length) supportHtml = '<p class="text-sm text-slate-500">Henüz destek mesajı yok.</p>';
 
+                var svcRes = await fetch('/api/admin/serviceCodes?adminUsername=' + encodeURIComponent(currentUser));
+                var svcData = await svcRes.json();
+                var serviceCodesHtml = '<p class="text-xs text-slate-500 mb-2">Yeni ürünlerin sağlayıcıdaki gerçek servis kodu isimle otomatik bulunur. Yanlış/eksikse buradan elle düzeltebilirsin.</p><div class="max-h-56 overflow-y-auto space-y-1">' + (svcData.list || []).map(function (s) {
+                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap items-center gap-2"><span class="font-bold text-white flex-1 min-w-[120px]">' + s.name + '</span>' +
+                        '<span class="' + (s.confirmed ? 'text-emerald-400' : 'text-amber-400') + '">' + s.code + (s.confirmed ? ' (bulundu)' : ' (tahmin)') + '</span>' +
+                        '<input id="svcCode_' + s.id + '" placeholder="elle kod gir" value="' + s.override + '" class="bg-black/40 border border-emerald-500/20 rounded px-2 py-1 text-xs text-white w-28">' +
+                        '<button onclick="saveServiceCode(\\'' + s.id + '\\')" class="bg-emerald-600 px-3 py-1 rounded text-xs font-bold">Kaydet</button></div>';
+                }).join('') + '</div>';
+
                 document.getElementById('mainContent').innerHTML =
                     '<div class="glassCard p-6 rounded-2xl space-y-6">' +
                     '<div class="flex justify-between items-center"><h2 class="text-xl font-bold text-emerald-400">Admin Paneli</h2><button onclick="location.reload();" class="bg-black/40 border border-emerald-500/30 px-4 py-2 rounded-xl text-xs font-bold">Geri Dön</button></div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-money-bill-wave mr-1"></i> Bekleyen Ödemeler</h3>' + pendingHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-receipt mr-1"></i> Tüm Ödemeler (kim ödeme yapmış)</h3>' + allPayHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-users mr-1"></i> Kayıtlı Kullanıcılar</h3>' + usersHtml + '</div>' +
-                    '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-right-to-bracket mr-1"></i> Giriş Yapanlar (kullanıcı / IP / zaman)</h3>' + loginsHtml + '</div>' +
+                    '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-right-to-bracket mr-1"></i> Giriş Yapanlar (kullanıcı / IP / kaynak / zaman)</h3>' + loginsHtml + '</div>' +
+                    '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-eye mr-1"></i> Ziyaretçiler (IP / nereden geldi / zaman)</h3>' + visitorsHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-sim-card mr-1"></i> Son Siparişler</h3>' + ordersHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-headset mr-1"></i> Destek Sohbetleri</h3>' + supportHtml + '</div>' +
+                    '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-code mr-1"></i> Yeni Ürünler - Servis Kodu Ayarları</h3>' + serviceCodesHtml + '</div>' +
                     '<div><a href="/api/admin/testApi?adminUsername=' + encodeURIComponent(currentUser) + '" target="_blank" class="inline-block bg-blue-600 px-4 py-2 rounded-xl text-xs font-bold text-white">Sağlayıcı Bağlantı / Bakiye Testi (JSON)</a></div>' +
                     '</div>';
             }
@@ -1142,6 +1210,15 @@ app.get('/', (req, res) => {
                 var text = inp.value.trim();
                 if (!text) return;
                 await fetch('/api/admin/support/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, username: username, text: text }) });
+                openAdminPanel();
+            }
+
+            async function saveServiceCode(itemId) {
+                var inp = document.getElementById('svcCode_' + itemId);
+                var code = inp.value.trim();
+                var r = await fetch('/api/admin/setServiceCode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, itemId: itemId, code: code }) });
+                var d = await r.json();
+                alert(d.message);
                 openAdminPanel();
             }
 
