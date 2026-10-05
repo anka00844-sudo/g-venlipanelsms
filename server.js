@@ -322,8 +322,9 @@ app.post('/api/buyNumber', async (req, res) => {
         let responseText = '';
         let usedCountry = candidates[0];
         let allRaw = [];
+        let sawNoBalance = false;
 
-        const ATTEMPTS_PER_COUNTRY = 4; // stok anlık yenilenebiliyor, her ülkede birkaç kez dene
+        const ATTEMPTS_PER_COUNTRY = 2; // adaylar artık canlı stoğa göre sıralı, gereksiz yere aynı ülkede bekletmeye gerek yok
         outer:
         for (const country of candidates) {
             usedCountry = country;
@@ -340,11 +341,18 @@ app.post('/api/buyNumber', async (req, res) => {
 
                 if (responseText.startsWith('ACCESS_NUMBER')) break outer;
                 if (responseText.startsWith('NO_NUMBERS')) {
-                    if (attempt < ATTEMPTS_PER_COUNTRY - 1) await new Promise(r => setTimeout(r, 1500));
+                    if (attempt < ATTEMPTS_PER_COUNTRY - 1) await new Promise(r => setTimeout(r, 1200));
                     continue;
                 }
-                break outer; // bakiye/anahtar gibi başka bir hata -> başka ülkeyi denemenin anlamı yok
+                if (responseText.startsWith('NO_BALANCE')) {
+                    // Bu ülke/servis kombinasyonu için sağlayıcı bakiyesi yetersiz; yine de daha ucuz olabilecek
+                    // başka bir aday ülke varsa onu denemeye devam et, direkt teslim olma.
+                    sawNoBalance = true;
+                    break; // bu ülkede daha fazla deneme yapma, sıradaki aday ülkeye geç
+                }
+                break outer; // başka bir sağlayıcı hatası (anahtar, servis vs.) -> denemeyi bitir
             }
+            if (responseText.startsWith('ACCESS_NUMBER')) break;
         }
 
         if (responseText.startsWith('ACCESS_NUMBER')) {
@@ -362,7 +370,16 @@ app.post('/api/buyNumber', async (req, res) => {
         }
 
         const key = responseText.split(':')[0];
-        if (key === 'NO_BALANCE') notifyLowProviderBalance('⚠️ OnaylaSMS bakiyen yetersiz! "' + item.name + '" için numara alınamadı.');
+        if (key === 'NO_BALANCE' || sawNoBalance) {
+            // Teşhis için: gerçek sağlayıcı bakiyesi ve bu ülke/servis için güncel maliyeti karşılaştırıp admin'e bildir
+            try {
+                const balResp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 15000 });
+                const balText = String(balResp.data || '').trim();
+                const prices = await fetchServicePrices(item.serviceCode);
+                const costInfo = prices[usedCountry] ? ('maliyet: ' + prices[usedCountry].cost + ', stok: ' + prices[usedCountry].count) : 'fiyat bilgisi alınamadı';
+                notifyLowProviderBalance('⚠️ NO_BALANCE: "' + item.name + '" (ülke ' + usedCountry + ') alınamadı.\nSağlayıcı bakiyesi: ' + balText + '\n' + costInfo + '\nDenenen: ' + allRaw.join(' | '));
+            } catch (e) { notifyLowProviderBalance('⚠️ NO_BALANCE: "' + item.name + '" alınamadı (bakiye kontrolü de başarısız: ' + e.message + ').'); }
+        }
         let msg;
         if (showDetail) {
             msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [denenen ülkeler: ' + allRaw.join(' | ') + ']';
@@ -588,7 +605,14 @@ app.get('/', (req, res) => {
                         <p class="text-[10px] text-amber-300/60 font-mono">GÜVENLİ SANAL NUMARA SİSTEMİ</p>
                     </div>
                 </div>
-                <div id="userArea" class="flex items-center gap-4"></div>
+                <div class="flex items-center gap-2 sm:gap-4 flex-wrap justify-end">
+                    <div id="contactCapsule" style="display:flex;align-items:center;gap:6px;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.3);border-radius:999px;padding:5px 10px">
+                        <a href="https://t.me/vipankaa" target="_blank" title="Telegram" style="color:#60a5fa;font-size:15px;line-height:0"><i class="fa-brands fa-telegram"></i></a>
+                        <span style="width:1px;height:14px;background:rgba(74,222,128,.25)"></span>
+                        <a href="https://wa.me/573181006792" target="_blank" title="WhatsApp" style="color:#4ade80;font-size:15px;line-height:0"><i class="fa-brands fa-whatsapp"></i></a>
+                    </div>
+                    <div id="userArea" class="flex items-center gap-2 sm:gap-4"></div>
+                </div>
             </header>
             <main id="mainContent"></main>
         </div>
@@ -624,31 +648,12 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        <div id="supportBubble" onclick="toggleSupport()" style="position:fixed;bottom:22px;right:22px;z-index:70;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 0 22px rgba(249,115,22,.55)">
-            <i id="supportBubbleIcon" class="fa-solid fa-headset text-white text-xl"></i>
-        </div>
-        <div id="supportWindow" class="hidden" style="position:fixed;bottom:90px;right:22px;z-index:65;width:320px;max-width:calc(100vw - 24px);height:440px;max-height:min(440px,70vh);background:rgba(10,5,3,.97);border:1px solid rgba(249,115,22,.4);border-radius:18px;box-shadow:0 0 40px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box">
-            <div style="padding:12px 14px;border-bottom:1px solid rgba(249,115,22,.25)">
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <span class="anka" style="font-weight:900;font-size:14px">CANLI DESTEK</span>
-                    <i class="fa-solid fa-xmark" style="cursor:pointer;color:#94a3b8;padding:6px;font-size:16px" onclick="closeSupportWindow()"></i>
-                </div>
-                <a id="supportContactLink" href="#" target="_blank" style="font-size:11px;color:#fbbf24;text-decoration:none;display:block">Telegram: @...</a>
-                <a id="supportContactWA" href="#" target="_blank" style="font-size:11px;color:#4ade80;text-decoration:none;display:block;margin-top:2px"><i class="fa-brands fa-whatsapp"></i> WhatsApp ile yaz</a>
-            </div>
-            <div id="supportMsgs" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;font-size:13px"></div>
-            <div style="padding:10px;border-top:1px solid rgba(249,115,22,.25);display:flex;gap:6px">
-                <input id="supportInput" onkeydown="if(event.key==='Enter')sendSupport()" placeholder="Mesajınızı yazın..." style="flex:1;background:#140a06;border:1px solid #2a180c;border-radius:10px;padding:8px 10px;color:#e2e8f0;font-size:13px">
-                <button onclick="sendSupport()" style="background:#f59e0b;color:#1a1000;border-radius:10px;padding:0 14px;font-weight:800">Gönder</button>
-            </div>
-        </div>
 
         <script>
             var currentUser = localStorage.getItem('currentUser') || null;
             var currentRole = localStorage.getItem('currentRole') || 'user';
             var isRegisterMode = false;
             var orderTimers = {};
-            var supportOpen = false, supportTimer = null;
             var phoenixCount = 0;
 
             (function () {
@@ -973,52 +978,6 @@ app.get('/', (req, res) => {
                 closeDeposit();
             }
 
-            function toggleSupport() {
-                if (supportOpen) { closeSupportWindow(); return; }
-                if (!currentUser) { openAuthModal('login'); return; }
-                supportOpen = true;
-                document.getElementById('supportWindow').classList.remove('hidden');
-                var ic = document.getElementById('supportBubbleIcon');
-                if (ic) { ic.classList.remove('fa-headset'); ic.classList.add('fa-xmark'); }
-                loadSupport();
-                if (supportTimer) clearInterval(supportTimer);
-                supportTimer = setInterval(loadSupport, 4000);
-            }
-            function closeSupportWindow() {
-                supportOpen = false;
-                document.getElementById('supportWindow').classList.add('hidden');
-                var ic = document.getElementById('supportBubbleIcon');
-                if (ic) { ic.classList.remove('fa-xmark'); ic.classList.add('fa-headset'); }
-                if (supportTimer) { clearInterval(supportTimer); supportTimer = null; }
-            }
-            function renderSupportMsg(m) {
-                var mine = m.from === 'user';
-                return '<div style="align-self:' + (mine ? 'flex-end' : 'flex-start') + ';max-width:80%;background:' + (mine ? 'rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.35)' : 'rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12)') + ';color:#e2e8f0;padding:7px 10px;border-radius:10px">' +
-                    '<div>' + m.text.replace(/</g, '&lt;') + '</div><div style="font-size:10px;color:#64748b;margin-top:2px">' + m.time + '</div></div>';
-            }
-            async function loadSupport() {
-                try {
-                    var res = await fetch('/api/support/messages?username=' + encodeURIComponent(currentUser));
-                    var data = await res.json();
-                    if (!data.success) return;
-                    var link = document.getElementById('supportContactLink');
-                    if (link && data.contact) { link.textContent = 'Telegram: @' + data.contact; link.href = 'https://t.me/' + data.contact; }
-                    var wa = document.getElementById('supportContactWA');
-                    if (wa && data.whatsapp) wa.href = 'https://wa.me/' + data.whatsapp;
-                    var box = document.getElementById('supportMsgs');
-                    if (!box) return;
-                    box.innerHTML = data.messages.map(renderSupportMsg).join('') || '<p style="color:#64748b;font-size:12px">Bir sorun mu var? Buradan yaz, en kısa sürede Telegram üzerinden dönüş yapılır.</p>';
-                    box.scrollTop = box.scrollHeight;
-                } catch (e) {}
-            }
-            async function sendSupport() {
-                var inp = document.getElementById('supportInput');
-                var text = inp.value.trim();
-                if (!text || !currentUser) return;
-                inp.value = '';
-                await fetch('/api/support/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: currentUser, text: text }) });
-                loadSupport();
-            }
 
             async function openAdminPanel() {
                 var res = await fetch('/api/admin/getData?adminUsername=' + encodeURIComponent(currentUser));
