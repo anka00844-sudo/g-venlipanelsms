@@ -357,7 +357,7 @@ app.post('/api/admin/processPayment', (req, res) => {
 app.get('/api/admin/testApi', async (req, res) => {
     if (!isAdmin(req.query.adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     try {
-        const balResp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 20000 });
+        const balResp = await providerGet({ action: 'getBalance' }, 20000);
         countryCache.time = 0;
         servicesListCache.time = 0;
         const { map, all } = await resolveCountries();
@@ -479,10 +479,7 @@ app.post('/api/buyNumber', async (req, res) => {
         for (const country of candidates) {
             usedCountry = country;
             for (let attempt = 0; attempt < ATTEMPTS_PER_COUNTRY; attempt++) {
-                const resp = await axios.get(ONAYLI_SMS_URL, {
-                    params: { api_key: ONAYLI_SMS_API_KEY, action: 'getNumber', service: serviceCode, country: country },
-                    timeout: 30000
-                });
+                const resp = await providerGet({ action: 'getNumber', service: serviceCode, country: country }, 30000);
                 responseText = resp.data;
                 if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
                 responseText = responseText ? String(responseText).trim() : '';
@@ -523,7 +520,7 @@ app.post('/api/buyNumber', async (req, res) => {
         if (key === 'NO_BALANCE' || sawNoBalance) {
             // Teşhis için: gerçek sağlayıcı bakiyesi ve bu ülke/servis için güncel maliyeti karşılaştırıp admin'e bildir
             try {
-                const balResp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 15000 });
+                const balResp = await providerGet({ action: 'getBalance' }, 15000);
                 const balText = String(balResp.data || '').trim();
                 const prices = await fetchServicePrices(serviceCode);
                 const costInfo = prices[usedCountry] ? ('maliyet: ' + prices[usedCountry].cost + ', stok: ' + prices[usedCountry].count) : 'fiyat bilgisi alınamadı';
@@ -571,7 +568,7 @@ app.post('/api/cancelNumber', async (req, res) => {
     if (order.status !== 'waiting') return res.json({ success: false, message: "Bu sipariş iptal edilemez." });
 
     try {
-        const resp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'setStatus', status: 8, id: activationId }, timeout: 20000 });
+        const resp = await providerGet({ action: 'setStatus', status: 8, id: activationId }, 20000);
         const text = String(resp.data || '').trim();
         if (text.startsWith('ACCESS_CANCEL')) {
             userObj.balance += order.price;
@@ -594,7 +591,7 @@ app.get('/api/checkSms/:id', async (req, res) => {
     if (!order || order.status !== 'waiting') return res.json({ success: false, message: "Sipariş aktif değil." });
 
     try {
-        const resp = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getStatus', id: activationId }, timeout: 20000 });
+        const resp = await providerGet({ action: 'getStatus', id: activationId }, 20000);
         let responseText = resp.data;
         if (typeof responseText === 'object') responseText = JSON.stringify(responseText);
         responseText = responseText ? String(responseText).trim() : '';
@@ -1251,10 +1248,10 @@ setInterval(async () => {
         o.sweepTries = (o.sweepTries || 0) + 1;
         if (o.sweepTries > 5) { o.status = 'expired'; continue; }
         try {
-            const st = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getStatus', id: id }, timeout: 15000 });
+            const st = await providerGet({ action: 'getStatus', id: id }, 15000);
             const t = String(st.data || '').trim();
             if (t.startsWith('STATUS_OK')) { o.code = t.split(':').slice(1).join(':'); o.status = 'completed'; continue; }
-            const c = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'setStatus', status: 8, id: id }, timeout: 15000 });
+            const c = await providerGet({ action: 'setStatus', status: 8, id: id }, 15000);
             if (String(c.data || '').trim().startsWith('ACCESS_CANCEL') && db.users[o.username]) {
                 db.users[o.username].balance += o.price;
                 o.status = 'cancelled';
@@ -1266,7 +1263,7 @@ setInterval(async () => {
 // Sağlayıcı bakiyesi düşükse 15 dakikada bir otomatik kontrol + Telegram uyarısı
 setInterval(async () => {
     try {
-        const r = await axios.get(ONAYLI_SMS_URL, { params: { api_key: ONAYLI_SMS_API_KEY, action: 'getBalance' }, timeout: 15000 });
+        const r = await providerGet({ action: 'getBalance' }, 15000);
         const m = String(r.data || '').match(/ACCESS_BALANCE:([0-9.]+)/);
         if (m) {
             const bal = parseFloat(m[1]);
