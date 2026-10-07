@@ -1,9 +1,15 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(bodyParser.json());
+
+// Her yeni dosya teslim edildiğinde bu tarihi değiştiriyoruz. Sitenin en altında küçük yazıyla görünür -
+// Render'a yüklediğin sürümün gerçekten güncellenip güncellenmediğini buradan kontrol edebilirsin.
+const APP_VERSION = '2026-10-08-01';
 
 // ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
@@ -35,7 +41,7 @@ function providerGet(params, timeout) {
     return run;
 }
 
-let db = {
+const DEFAULT_DB = {
     users: {
         "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
     },
@@ -45,6 +51,36 @@ let db = {
     orders: {},
     support: {} // username -> [{from:'user'|'admin', text, time, ts}]
 };
+
+// ====== KALICI KAYIT (dosyaya yazma) ======
+// db tamamen hafızada tutulursa sunucu her yeniden başladığında (uyku modundan uyanma, yeniden deploy, çökme vs.)
+// kayıtlı kullanıcılar/siparişler/ödemeler sıfırlanır. Bunu önlemek için her değişiklikte diske de yazıyoruz ve
+// açılışta diskten geri yüklüyoruz. NOT: Render'ın ücretsiz planında disk kalıcı değildir; bu, uyku/çökme sonrası
+// veri kaybını önler ama GERÇEK bir "yeniden deploy" (yeni kod yükleme) sonrası diskin kendisi de sıfırlanabilir.
+// Kalıcılığın garantili olması için Render'da bir "Persistent Disk" eklenmesi (Settings > Disks) gerekir -
+// DB_FILE yolu o diskin bağlandığı klasöre taşınırsa (örn. /var/data/db.json) deploy'lar arasında da korunur.
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'anka_data.json');
+let db = DEFAULT_DB;
+try {
+    if (fs.existsSync(DB_FILE)) {
+        const loaded = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+        db = Object.assign({}, DEFAULT_DB, loaded);
+        // Eski kayıtta olmayan alanlar varsayılanla tamamlansın
+        for (const k in DEFAULT_DB) if (db[k] === undefined) db[k] = DEFAULT_DB[k];
+        if (!db.users || !Object.keys(db.users).length) db.users = DEFAULT_DB.users;
+        console.log('[db] Kayıtlı veri diskten yüklendi: ' + Object.keys(db.users).length + ' kullanıcı, ' + Object.keys(db.orders).length + ' sipariş.');
+    }
+} catch (e) { console.error('[db] Diskten yükleme hatası, varsayılan veriyle başlanıyor:', e.message); }
+
+let saveTimer = null;
+function persist() {
+    // Art arda gelen çok sayıda değişiklikte her seferinde diske yazmamak için 400ms topluyor (debounce)
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+        try { fs.writeFileSync(DB_FILE, JSON.stringify(db)); } catch (e) { console.error('[db] Diske yazma hatası:', e.message); }
+    }, 400);
+}
+
 let supportMsgMap = {}; // telegram mesaj id -> username (adminin hangi mesaja cevap verdiğini eşlemek için)
 
 // Ziyaretçinin nereden geldiğini (hangi platform) tahmin eder: önce ?src= / ?utm_source= parametresi,
@@ -91,6 +127,8 @@ function isAdmin(name) {
 // keşfedilip önbelleğe alınır (resolveServiceCode). Admin panelden de elle düzeltilebilir.
 const CATALOG = [
     { id: 'wa_tr', key: 'tr', name: 'WhatsApp Türkiye', serviceCode: 'wa', defCountry: '62', price: 300, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
+    // Aynı WhatsApp Türkiye havuzundan çekilir (servis/ülke aynı) - sadece panelde farklı isim/fiyatla gösterilir.
+    { id: 'wa_tr_dinlenmis', key: 'tr', name: 'Dinlendirilmiş WhatsApp Türkiye', serviceCode: 'wa', defCountry: '62', price: 360, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
     { id: 'tg_tr', key: 'tr', name: 'Telegram Türkiye', serviceCode: 'tg', defCountry: '62', price: 200, icon: 'fa-telegram', iconSet: 'fa-brands', bg: 'bg-blue-500/10', color: 'text-blue-400' },
     { id: 'wa_ph', key: 'ph', name: 'WhatsApp Filipinler', serviceCode: 'wa', defCountry: '4', price: 200, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
     { id: 'tg_us', key: 'us', name: 'Telegram ABD', serviceCode: 'tg', defCountry: '187', alt: ['12'], price: 200, icon: 'fa-telegram', iconSet: 'fa-brands', bg: 'bg-blue-500/10', color: 'text-blue-400' },
@@ -300,6 +338,7 @@ app.post('/api/auth/register', (req, res) => {
     if (db.users[username]) return res.json({ success: false, message: "Bu kullanıcı adı zaten alınmış." });
 
     db.users[username] = { username, password, balance: 0, role: "user", createdAt: Date.now(), registeredAt: new Date().toLocaleString('tr-TR') };
+    persist();
     res.json({ success: true, username, role: "user" });
 });
 
@@ -309,6 +348,7 @@ app.post('/api/deposit/notify', async (req, res) => {
 
     const paymentId = 'pay_' + Date.now();
     db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR'), ts: Date.now() };
+    persist();
 
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -346,9 +386,11 @@ app.post('/api/admin/processPayment', (req, res) => {
     if (action === 'approve') {
         payment.status = 'approved';
         if (db.users[payment.username]) db.users[payment.username].balance += payment.amount;
+        persist();
         res.json({ success: true, message: "Ödeme onaylandı." });
     } else {
         payment.status = 'rejected';
+        persist();
         res.json({ success: true, message: "Ödeme reddedildi." });
     }
 });
@@ -468,7 +510,9 @@ app.post('/api/buyNumber', async (req, res) => {
 
     try {
         const serviceCode = await resolveServiceCode(item);
-        const candidates = await countryCandidates(item, serviceCode);
+        // Adaylar zaten stoğa göre en iyiden en kötüye sıralı; hepsini denemek (özellikle sağlayıcı
+        // yavaşsa/sınırlıyorsa) kullanıcıyı çok uzun bekletir. İlk 4 adayla sınırlıyoruz.
+        const candidates = (await countryCandidates(item, serviceCode)).slice(0, 4);
         let responseText = '';
         let usedCountry = candidates[0];
         let allRaw = [];
@@ -489,6 +533,11 @@ app.post('/api/buyNumber', async (req, res) => {
                 if (responseText.startsWith('ACCESS_NUMBER')) break outer;
                 if (responseText.startsWith('NO_NUMBERS')) {
                     if (attempt < ATTEMPTS_PER_COUNTRY - 1) await new Promise(r => setTimeout(r, 1200));
+                    continue;
+                }
+                if (responseText.startsWith('TOO_MANY_REQUESTS')) {
+                    // Sağlayıcı "çok fazla istek" diyor - stok/bakiye sorunu değil, sadece yavaşlamamız gerekiyor.
+                    await new Promise(r => setTimeout(r, 4000));
                     continue;
                 }
                 if (responseText.startsWith('NO_BALANCE')) {
@@ -513,6 +562,7 @@ app.post('/api/buyNumber', async (req, res) => {
                 time: new Date().toLocaleString('tr-TR'), createdAt: Date.now()
             };
             db.orders[activationId] = order;
+            persist();
             return res.json({ success: true, order });
         }
 
@@ -532,10 +582,12 @@ app.post('/api/buyNumber', async (req, res) => {
             msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [servis kodu: ' + serviceCode + ', denenen ülkeler: ' + allRaw.join(' | ') + ']';
         } else if (key === 'NO_NUMBERS') {
             msg = 'Bu ürün için şu an numara bulunamadı, otomatik tekrar deneniyor...';
+        } else if (key === 'TOO_MANY_REQUESTS') {
+            msg = 'Sistem yoğun, birkaç saniye içinde otomatik tekrar deneniyor...';
         } else {
             msg = 'Şu an numara alınamıyor, lütfen daha sonra tekrar deneyin.';
         }
-        return res.json({ success: false, message: msg, retryable: key === 'NO_NUMBERS' });
+        return res.json({ success: false, message: msg, retryable: (key === 'NO_NUMBERS' || key === 'TOO_MANY_REQUESTS') });
     } catch (error) {
         console.error("API Bağlantı Hatası:", error.message);
         return res.json({ success: false, message: showDetail ? ("Sağlayıcı bağlantı hatası: " + error.message) : "Bağlantı hatası, lütfen tekrar deneyin." });
@@ -573,6 +625,7 @@ app.post('/api/cancelNumber', async (req, res) => {
         if (text.startsWith('ACCESS_CANCEL')) {
             userObj.balance += order.price;
             order.status = 'cancelled';
+            persist();
             return res.json({ success: true, message: "Numara iptal edildi ve bakiye hesabınıza iade edildi." });
         }
         if (text.startsWith('EARLY_CANCEL_DENIED')) {
@@ -600,6 +653,7 @@ app.get('/api/checkSms/:id', async (req, res) => {
             const code = responseText.split(':').slice(1).join(':');
             order.code = code;
             order.status = 'completed';
+            persist();
             return res.json({ success: true, status: 'completed', code, phoneNumber: order.phoneNumber });
         }
         return res.json({ success: true, status: 'waiting', code: "Bekleniyor...", phoneNumber: order.phoneNumber });
@@ -621,6 +675,7 @@ app.post(webhookPath, async (req, res) => {
                 if (!db.support[username]) db.support[username] = [];
                 db.support[username].push({ from: 'admin', text: replyText, time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
                 if (db.support[username].length > 200) db.support[username].shift();
+                persist();
                 await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: ADMIN_CHAT_ID, text: `➡️ ${username} kullanıcısına iletildi.`, reply_to_message_id: update.message.message_id });
             }
         }
@@ -636,9 +691,11 @@ app.post(webhookPath, async (req, res) => {
                     if (action === 'approve') {
                         payment.status = 'approved';
                         if (db.users[payment.username]) db.users[payment.username].balance += payment.amount;
+                        persist();
                         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: chatId, text: `✅ Ödeme Onaylandı!\nKullanıcı: ${payment.username}\nTutar: ${payment.amount} TL` });
                     } else if (action === 'reject') {
                         payment.status = 'rejected';
+                        persist();
                         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: chatId, text: `❌ Ödeme Reddedildi!\nKullanıcı: ${payment.username}` });
                     }
                 }
@@ -768,6 +825,7 @@ app.get('/', (req, res) => {
                 </div>
             </header>
             <main id="mainContent"></main>
+            <p style="text-align:center;color:rgba(74,222,128,.25);font-size:10px;font-family:monospace;margin-top:30px">sürüm: ${APP_VERSION}</p>
         </div>
 
         <div id="authModal" class="fixed inset-0 bg-black/85 flex items-center justify-center hidden z-50" onclick="if(event.target===this) closeAuthModal()">
@@ -1242,22 +1300,25 @@ app.get('/', (req, res) => {
 // Süresi dolan ya da yarım kalan siparişleri sunucu kendisi temizler (kullanıcı sayfayı kapatsa bile)
 setInterval(async () => {
     const now = Date.now();
+    let changed = false;
     for (const id in db.orders) {
         const o = db.orders[id];
         if (o.status !== 'waiting' || !o.createdAt || now - o.createdAt < 11 * 60 * 1000) continue;
         o.sweepTries = (o.sweepTries || 0) + 1;
-        if (o.sweepTries > 5) { o.status = 'expired'; continue; }
+        if (o.sweepTries > 5) { o.status = 'expired'; changed = true; continue; }
         try {
             const st = await providerGet({ action: 'getStatus', id: id }, 15000);
             const t = String(st.data || '').trim();
-            if (t.startsWith('STATUS_OK')) { o.code = t.split(':').slice(1).join(':'); o.status = 'completed'; continue; }
+            if (t.startsWith('STATUS_OK')) { o.code = t.split(':').slice(1).join(':'); o.status = 'completed'; changed = true; continue; }
             const c = await providerGet({ action: 'setStatus', status: 8, id: id }, 15000);
             if (String(c.data || '').trim().startsWith('ACCESS_CANCEL') && db.users[o.username]) {
                 db.users[o.username].balance += o.price;
                 o.status = 'cancelled';
+                changed = true;
             }
         } catch (e) {}
     }
+    if (changed) persist();
 }, 60000);
 
 // Sağlayıcı bakiyesi düşükse 15 dakikada bir otomatik kontrol + Telegram uyarısı
@@ -1274,7 +1335,7 @@ setInterval(async () => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, async () => {
-    console.log(`Sunucu ${PORT} portunda çalışıyor.`);
+    console.log(`Sunucu ${PORT} portunda çalışıyor. Sürüm: ${APP_VERSION}`);
     if (!ONAYLI_SMS_API_KEY) console.warn('UYARI: ONAYLI_SMS_API_KEY ayarlanmamış!');
     try {
         const webhookUrl = `${RENDER_EXTERNAL_URL}${webhookPath}`;
