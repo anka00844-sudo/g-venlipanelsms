@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 
 // Her yeni dosya teslim edildiğinde bu tarihi değiştiriyoruz. Sitenin en altında küçük yazıyla görünür -
 // Render'a yüklediğin sürümün gerçekten güncellenip güncellenmediğini buradan kontrol edebilirsin.
-const APP_VERSION = '2026-10-08-01';
+const APP_VERSION = '2026-10-08-02';
 
 // ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
@@ -472,10 +472,20 @@ app.post('/api/admin/support/reply', async (req, res) => {
 });
 
 // ====== OTOMASYON: sağlayıcı bakiyesi düşükse Telegram uyarısı ======
+// NOT: Bu fonksiyon iki farklı amaç için kullanılıyordu ve ikisi de AYNI 10 dakikalık limiti paylaşıyordu -
+// bu yüzden bir satın alma denemesindeki NO_BALANCE teşhis mesajı, az önce gönderilmiş genel "bakiye azaldı"
+// uyarısı yüzünden sessizce engellenebiliyordu. Artık ayrı: periyodik genel uyarı kısıtlı, her başarısız
+// satın alma denemesinin teşhis mesajı ise (spam olmasın diye yine de çok kısa bir aralıkla) ayrı gönderiliyor.
 let lastBalanceAlert = 0;
 async function notifyLowProviderBalance(text) {
     if (Date.now() - lastBalanceAlert < 600000) return; // en fazla 10 dakikada bir
     lastBalanceAlert = Date.now();
+    try { await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: ADMIN_CHAT_ID, text }); } catch (e) {}
+}
+let lastPurchaseFailAlert = 0;
+async function notifyPurchaseFailure(text) {
+    if (Date.now() - lastPurchaseFailAlert < 8000) return; // aynı anda art arda gelen denemelerde spam olmasın diye 8sn
+    lastPurchaseFailAlert = Date.now();
     try { await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: ADMIN_CHAT_ID, text }); } catch (e) {}
 }
 
@@ -567,6 +577,7 @@ app.post('/api/buyNumber', async (req, res) => {
         }
 
         const key = responseText.split(':')[0];
+        let balanceDiag = '';
         if (key === 'NO_BALANCE' || sawNoBalance) {
             // Teşhis için: gerçek sağlayıcı bakiyesi ve bu ülke/servis için güncel maliyeti karşılaştırıp admin'e bildir
             try {
@@ -574,12 +585,13 @@ app.post('/api/buyNumber', async (req, res) => {
                 const balText = String(balResp.data || '').trim();
                 const prices = await fetchServicePrices(serviceCode);
                 const costInfo = prices[usedCountry] ? ('maliyet: ' + prices[usedCountry].cost + ', stok: ' + prices[usedCountry].count) : 'fiyat bilgisi alınamadı';
-                notifyLowProviderBalance('⚠️ NO_BALANCE: "' + item.name + '" (servis ' + serviceCode + ', ülke ' + usedCountry + ') alınamadı.\nSağlayıcı bakiyesi: ' + balText + '\n' + costInfo + '\nDenenen: ' + allRaw.join(' | '));
-            } catch (e) { notifyLowProviderBalance('⚠️ NO_BALANCE: "' + item.name + '" alınamadı (bakiye kontrolü de başarısız: ' + e.message + ').'); }
+                balanceDiag = 'Gerçek sağlayıcı (OnaylaSMS) bakiyesi: ' + balText + ' | Bu numaranın maliyeti: ' + costInfo + '. NOT: Bu, panel içindeki TL bakiyenden FARKLI bir şey - OnaylaSMS hesabına gerçek para yüklenmesi gerekiyor.';
+                notifyPurchaseFailure('⚠️ NO_BALANCE: "' + item.name + '" (servis ' + serviceCode + ', ülke ' + usedCountry + ') alınamadı.\nSağlayıcı bakiyesi: ' + balText + '\n' + costInfo + '\nDenenen: ' + allRaw.join(' | '));
+            } catch (e) { notifyPurchaseFailure('⚠️ NO_BALANCE: "' + item.name + '" alınamadı (bakiye kontrolü de başarısız: ' + e.message + ').'); }
         }
         let msg;
         if (showDetail) {
-            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [servis kodu: ' + serviceCode + ', denenen ülkeler: ' + allRaw.join(' | ') + ']';
+            msg = (PROVIDER_ERRORS[key] || ('Sağlayıcı yanıtı: ' + responseText)) + ' [servis kodu: ' + serviceCode + ', denenen ülkeler: ' + allRaw.join(' | ') + ']' + (balanceDiag ? ('\n\n' + balanceDiag) : '');
         } else if (key === 'NO_NUMBERS') {
             msg = 'Bu ürün için şu an numara bulunamadı, otomatik tekrar deneniyor...';
         } else if (key === 'TOO_MANY_REQUESTS') {
