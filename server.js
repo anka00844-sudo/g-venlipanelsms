@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 
 // Her yeni dosya teslim edildiğinde bu tarihi değiştiriyoruz. Sitenin en altında küçük yazıyla görünür -
 // Render'a yüklediğin sürümün gerçekten güncellenip güncellenmediğini buradan kontrol edebilirsin.
-const APP_VERSION = '2026-10-08-04';
+const APP_VERSION = '2026-10-08-06';
 
 // ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
@@ -395,6 +395,19 @@ app.post('/api/admin/processPayment', (req, res) => {
     }
 });
 
+// Admin'in bir kullanıcının panel içi TL bakiyesini elle değiştirmesi (yükleme yapmadan, örn. hediye/iade/düzeltme için)
+app.post('/api/admin/adjustBalance', (req, res) => {
+    const { adminUsername, username, amount } = req.body;
+    if (!isAdmin(adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
+    if (!username || !db.users[username]) return res.json({ success: false, message: "Kullanıcı bulunamadı." });
+    const amt = Number(amount);
+    if (isNaN(amt) || amt === 0) return res.json({ success: false, message: "Geçerli bir tutar gir (eklemek için pozitif, düşmek için negatif, örn: 50 veya -20)." });
+    db.users[username].balance += amt;
+    if (db.users[username].balance < 0) db.users[username].balance = 0;
+    persist();
+    res.json({ success: true, message: username + " kullanıcısının bakiyesi güncellendi. Yeni bakiye: " + db.users[username].balance.toFixed(2) + " TL", newBalance: db.users[username].balance });
+});
+
 // Sağlayıcı bağlantı testi: bakiye + her ürün için denenecek ülke ID'leri
 app.get('/api/admin/testApi', async (req, res) => {
     if (!isAdmin(req.query.adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
@@ -403,10 +416,19 @@ app.get('/api/admin/testApi', async (req, res) => {
         countryCache.time = 0;
         servicesListCache.time = 0;
         const { map, all } = await resolveCountries();
+        const onlyId = req.query.productId;
+        const items = onlyId ? CATALOG.filter(c => c.id === onlyId) : CATALOG;
         const urunler = [];
-        for (const item of CATALOG) {
+        for (const item of items) {
             const serviceCode = await resolveServiceCode(item);
-            urunler.push({ urun: item.name, servisKodu: serviceCode, kodOnaylandi: !!(serviceCodeCache[item.id] && serviceCodeCache[item.id].confirmed) || !!item.serviceCode, denenecekUlkeler: await countryCandidates(item, serviceCode) });
+            const candidates = await countryCandidates(item, serviceCode);
+            const prices = await fetchServicePrices(serviceCode);
+            urunler.push({
+                urun: item.name, servisKodu: serviceCode,
+                kodOnaylandi: !!(serviceCodeCache[item.id] && serviceCodeCache[item.id].confirmed) || !!item.serviceCode,
+                denenecekUlkeler: candidates,
+                ilkUlkeFiyatBilgisi: prices[candidates[0]] || 'fiyat bilgisi yok'
+            });
         }
         res.json({ success: true, providerBalance: balResp.data, bulunanUlkeIdleri: map, tumAdaylar: all, urunler });
     } catch (e) {
@@ -1222,7 +1244,14 @@ app.get('/', (req, res) => {
                 if (!data.payments.length) allPayHtml = '<p class="text-sm text-slate-500">Henüz ödeme yok.</p>';
 
                 var usersHtml = '<div class="max-h-56 overflow-y-auto space-y-1">' + data.users.map(function (u) {
-                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex justify-between"><span class="font-bold text-white">' + u.username + '</span><span>' + u.balance.toFixed(2) + ' TL</span><span class="text-slate-500">' + u.role + '</span><span class="text-slate-500">' + u.registeredAt + '</span></div>';
+                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap justify-between items-center gap-2">' +
+                        '<span class="font-bold text-white">' + u.username + '</span>' +
+                        '<span>' + u.balance.toFixed(2) + ' TL</span>' +
+                        '<span class="text-slate-500">' + u.role + '</span>' +
+                        '<span class="text-slate-500">' + u.registeredAt + '</span>' +
+                        '<input id="balAdj_' + u.username + '" placeholder="+50 / -20" class="bg-black/40 border border-emerald-500/20 rounded px-2 py-1 text-xs text-white w-20">' +
+                        '<button onclick="adjustBalance(\\'' + u.username + '\\')" class="bg-blue-600 px-2 py-1 rounded text-xs font-bold">Uygula</button>' +
+                        '</div>';
                 }).join('') + '</div>';
 
                 var loginsHtml = '<div class="max-h-56 overflow-y-auto space-y-1">' + data.logins.map(function (l) {
@@ -1268,8 +1297,36 @@ app.get('/', (req, res) => {
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-sim-card mr-1"></i> Son Siparişler</h3>' + ordersHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-headset mr-1"></i> Destek Sohbetleri</h3>' + supportHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-code mr-1"></i> Yeni Ürünler - Servis Kodu Ayarları</h3>' + serviceCodesHtml + '</div>' +
-                    '<div><a href="/api/admin/testApi?adminUsername=' + encodeURIComponent(currentUser) + '" target="_blank" class="inline-block bg-blue-600 px-4 py-2 rounded-xl text-xs font-bold text-white">Sağlayıcı Bağlantı / Bakiye Testi (JSON)</a></div>' +
+                    '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-stethoscope mr-1"></i> Sağlayıcı Teşhis (neden numara alınamıyor?)</h3>' +
+                    '<div class="flex flex-wrap gap-2 items-center mb-2">' +
+                    '<select id="diagProduct" class="bg-black/40 border border-emerald-500/20 rounded px-2 py-1 text-xs text-white">' + CATALOG.map(function (c) { return '<option value="' + c.id + '">' + c.name + '</option>'; }).join('') + '</select>' +
+                    '<button onclick="runDiag()" class="bg-blue-600 px-3 py-1 rounded text-xs font-bold">Kontrol Et</button>' +
+                    '</div>' +
+                    '<div id="diagResult" class="text-xs text-slate-400">Bir ürün seçip "Kontrol Et" butonuna bas.</div>' +
+                    '</div>' +
                     '</div>';
+            }
+
+            async function runDiag() {
+                var sel = document.getElementById('diagProduct');
+                var box = document.getElementById('diagResult');
+                box.innerHTML = '<span class="text-slate-500">Sorgulanıyor, birkaç saniye sürebilir...</span>';
+                try {
+                    var r = await fetch('/api/admin/testApi?adminUsername=' + encodeURIComponent(currentUser) + '&productId=' + encodeURIComponent(sel.value));
+                    var d = await r.json();
+                    if (!d.success) { box.innerHTML = '<span class="text-red-400">Hata: ' + (d.error || 'bilinmiyor') + '</span>'; return; }
+                    var u = d.urunler[0];
+                    if (!u) { box.innerHTML = '<span class="text-red-400">Ürün bulunamadı.</span>'; return; }
+                    var p = u.ilkUlkeFiyatBilgisi;
+                    var priceHtml = (p && typeof p === 'object') ? ('maliyet: <b>' + p.cost + '</b> / stok: <b>' + p.count + '</b>') : 'fiyat bilgisi alınamadı (sağlayıcı bu ülke için fiyat döndürmedi)';
+                    box.innerHTML =
+                        '<div class="bg-black/30 p-3 rounded-lg space-y-1">' +
+                        '<div>Gerçek sağlayıcı bakiyesi: <b class="text-emerald-400">' + JSON.stringify(d.providerBalance) + '</b></div>' +
+                        '<div>Kullanılan servis kodu: <b>' + u.servisKodu + '</b> (' + (u.kodOnaylandi ? 'isimle doğrulandı' : 'tahmin') + ')</div>' +
+                        '<div>Denenecek ülke kodları (öncelik sırasıyla): <b>' + u.denenecekUlkeler.join(', ') + '</b></div>' +
+                        '<div>İlk denenecek ülkenin fiyat/stok bilgisi: ' + priceHtml + '</div>' +
+                        '</div>';
+                } catch (e) { box.innerHTML = '<span class="text-red-400">İstek başarısız: ' + e.message + '</span>'; }
             }
 
             async function adminReplySupport(username) {
@@ -1278,6 +1335,16 @@ app.get('/', (req, res) => {
                 if (!text) return;
                 await fetch('/api/admin/support/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, username: username, text: text }) });
                 openAdminPanel();
+            }
+
+            async function adjustBalance(username) {
+                var inp = document.getElementById('balAdj_' + username);
+                var val = inp.value.trim();
+                if (!val) return;
+                var r = await fetch('/api/admin/adjustBalance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, username: username, amount: val }) });
+                var d = await r.json();
+                alert(d.message);
+                if (d.success) openAdminPanel();
             }
 
             async function saveServiceCode(itemId) {
