@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 
 // Her yeni dosya teslim edildiğinde bu tarihi değiştiriyoruz. Sitenin en altında küçük yazıyla görünür -
 // Render'a yüklediğin sürümün gerçekten güncellenip güncellenmediğini buradan kontrol edebilirsin.
-const APP_VERSION = '2026-10-08-06';
+const APP_VERSION = '2026-10-08-07';
 
 // ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
@@ -68,6 +68,12 @@ try {
         // Eski kayıtta olmayan alanlar varsayılanla tamamlansın
         for (const k in DEFAULT_DB) if (db[k] === undefined) db[k] = DEFAULT_DB[k];
         if (!db.users || !Object.keys(db.users).length) db.users = DEFAULT_DB.users;
+        // ÖNEMLİ: diskteki dosya kullanıcıları içeriyor olsa bile, varsayılan admin hesabı (Aklomanti)
+        // o dosyada yoksa kayboluyordu (örn. dosya admin eklenmeden önce oluşmuşsa) - bu girişi engelliyordu.
+        // Admin hesabını, diskteki diğer kullanıcılara dokunmadan her zaman garanti ediyoruz.
+        for (const u in DEFAULT_DB.users) {
+            if (!db.users[u]) db.users[u] = DEFAULT_DB.users[u];
+        }
         console.log('[db] Kayıtlı veri diskten yüklendi: ' + Object.keys(db.users).length + ' kullanıcı, ' + Object.keys(db.orders).length + ' sipariş.');
     }
 } catch (e) { console.error('[db] Diskten yükleme hatası, varsayılan veriyle başlanıyor:', e.message); }
