@@ -377,9 +377,10 @@ app.get('/api/admin/getData', (req, res) => {
     const logins = db.logins.slice(0, 100);
     const orders = Object.values(db.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 100);
     const supportChats = Object.keys(db.support).map(u => ({ username: u, last: db.support[u][db.support[u].length - 1], count: db.support[u].length })).sort((a, b) => (b.last ? b.last.ts : 0) - (a.last ? a.last.ts : 0));
+    const catalogList = CATALOG.map(c => ({ id: c.id, name: c.name }));
     const visitorList = db.visitors.slice(0, 100);
 
-    res.json({ success: true, users, payments, logins, orders, supportChats, visitors: db.visitors.length, visitorList });
+    res.json({ success: true, users, payments, logins, orders, supportChats, visitors: db.visitors.length, visitorList, catalog: catalogList });
 });
 
 app.post('/api/admin/processPayment', (req, res) => {
@@ -1305,7 +1306,7 @@ app.get('/', (req, res) => {
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-code mr-1"></i> Yeni Ürünler - Servis Kodu Ayarları</h3>' + serviceCodesHtml + '</div>' +
                     '<div><h3 class="font-bold mb-2 text-emerald-300"><i class="fa-solid fa-stethoscope mr-1"></i> Sağlayıcı Teşhis (neden numara alınamıyor?)</h3>' +
                     '<div class="flex flex-wrap gap-2 items-center mb-2">' +
-                    '<select id="diagProduct" class="bg-black/40 border border-emerald-500/20 rounded px-2 py-1 text-xs text-white">' + CATALOG.map(function (c) { return '<option value="' + c.id + '">' + c.name + '</option>'; }).join('') + '</select>' +
+                    '<select id="diagProduct" class="bg-black/40 border border-emerald-500/20 rounded px-2 py-1 text-xs text-white">' + (data.catalog || []).map(function (c) { return '<option value="' + c.id + '">' + c.name + '</option>'; }).join('') + '</select>' +
                     '<button onclick="runDiag()" class="bg-blue-600 px-3 py-1 rounded text-xs font-bold">Kontrol Et</button>' +
                     '</div>' +
                     '<div id="diagResult" class="text-xs text-slate-400">Bir ürün seçip "Kontrol Et" butonuna bas.</div>' +
