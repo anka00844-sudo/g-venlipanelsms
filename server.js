@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 
 // Her yeni dosya teslim edildiğinde bu tarihi değiştiriyoruz. Sitenin en altında küçük yazıyla görünür -
 // Render'a yüklediğin sürümün gerçekten güncellenip güncellenmediğini buradan kontrol edebilirsin.
-const APP_VERSION = '2026-10-08-07';
+const APP_VERSION = '2026-10-09-08';
 
 // ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
@@ -416,7 +416,7 @@ app.get('/api/admin/getData', (req, res) => {
     const { adminToken } = req.query;
     if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
 
-    const users = Object.values(db.users).map(u => ({ username: u.username, balance: u.balance, role: u.role, registeredAt: u.registeredAt || '-' }));
+    const users = Object.values(db.users).map(u => ({ username: u.username, balance: u.balance, role: u.role, banned: !!u.banned, registeredAt: u.registeredAt || '-' }));
     const payments = Object.values(db.payments).sort((a, b) => (b.ts || 0) - (a.ts || 0));
     const logins = db.logins.slice(0, 100);
     const orders = Object.values(db.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 100);
@@ -478,7 +478,7 @@ app.post('/api/admin/banUser', (req, res) => {
 
 // Sağlayıcı bağlantı testi: bakiye + her ürün için denenecek ülke ID'leri
 app.get('/api/admin/testApi', async (req, res) => {
-    if (!isAdmin(req.query.adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
+    if (!checkAdminToken(req.query.adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     try {
         const balResp = await providerGet({ action: 'getBalance' }, 20000);
         countryCache.time = 0;
@@ -506,8 +506,8 @@ app.get('/api/admin/testApi', async (req, res) => {
 
 // ====== Servis kodu elle düzeltme (otomatik keşif yanlışsa admin düzeltebilir) ======
 app.post('/api/admin/setServiceCode', (req, res) => {
-    const { adminUsername, itemId, code } = req.body;
-    if (!isAdmin(adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
+    const { adminToken, itemId, code } = req.body;
+    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     const item = CATALOG.find(c => c.id === itemId);
     if (!item) return res.json({ success: false, message: "Ürün bulunamadı." });
     if (!code || !code.trim()) { delete serviceOverrides[itemId]; return res.json({ success: true, message: "Elle ayar kaldırıldı, otomatik keşfe dönüldü." }); }
@@ -516,7 +516,7 @@ app.post('/api/admin/setServiceCode', (req, res) => {
     res.json({ success: true, message: "Servis kodu kaydedildi: " + code.trim() });
 });
 app.get('/api/admin/serviceCodes', async (req, res) => {
-    if (!isAdmin(req.query.adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
+    if (!checkAdminToken(req.query.adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     const list = [];
     for (const item of CATALOG) {
         if (item.serviceCode) continue; // sabit olanları göstermeye gerek yok
@@ -553,8 +553,8 @@ app.get('/api/support/messages', (req, res) => {
 });
 
 app.post('/api/admin/support/reply', async (req, res) => {
-    const { adminUsername, username, text } = req.body;
-    if (!isAdmin(adminUsername)) return res.json({ success: false });
+    const { adminToken, username, text } = req.body;
+    if (!checkAdminToken(adminToken)) return res.json({ success: false });
     if (!db.users[username] || !text || !text.trim()) return res.json({ success: false });
     if (!db.support[username]) db.support[username] = [];
     db.support[username].push({ from: 'admin', text: text.trim().slice(0, 1000), time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
@@ -966,6 +966,7 @@ app.get('/', (req, res) => {
         <script>
             var currentUser = localStorage.getItem('currentUser') || null;
             var currentRole = localStorage.getItem('currentRole') || 'user';
+            var adminToken = localStorage.getItem('adminToken') || null;
             var isRegisterMode = false;
             var orderTimers = {};
             var phoenixCount = 0;
@@ -1084,7 +1085,7 @@ app.get('/', (req, res) => {
                         '<div class="flex items-center gap-3">' +
                         '<span class="text-sm font-medium">@<strong class="text-white">' + currentUser + '</strong></span>' +
                         '<span id="userBalance" class="bg-emerald-500/10 text-emerald-300 px-3.5 py-1.5 rounded-full text-xs font-bold border border-emerald-500/30">0.00 TL</span>' +
-                        (currentRole === 'admin' ? '<button onclick="openAdminPanel()" class="bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 rounded-xl text-xs font-bold">Admin Panel</button>' : '') +
+                        (currentRole === 'admin' && adminToken ? '<button onclick="openAdminPanel()" class="bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 rounded-xl text-xs font-bold">Admin Panel</button>' : '') +
                         '<button onclick="logout()" class="text-red-400 text-sm p-2"><i class="fa-solid fa-right-from-bracket"></i></button>' +
                         '</div>';
                     fetchBalance();
@@ -1276,6 +1277,8 @@ app.get('/', (req, res) => {
                     currentRole = data.role || 'user';
                     localStorage.setItem('currentUser', currentUser);
                     localStorage.setItem('currentRole', currentRole);
+                    if (data.adminToken) { adminToken = data.adminToken; localStorage.setItem('adminToken', adminToken); }
+                    else { adminToken = null; localStorage.removeItem('adminToken'); }
                     closeAuthModal();
                     init();
                 } else {
@@ -1294,7 +1297,7 @@ app.get('/', (req, res) => {
 
 
             async function openAdminPanel() {
-                var res = await fetch('/api/admin/getData?adminUsername=' + encodeURIComponent(currentUser));
+                var res = await fetch('/api/admin/getData?adminToken=' + encodeURIComponent(adminToken || ''));
                 var data = await res.json();
                 if (!data.success) return alert('Yetkisiz!');
 
@@ -1302,7 +1305,8 @@ app.get('/', (req, res) => {
                 data.payments.filter(function (p) { return p.status === 'pending'; }).forEach(function (p) {
                     pendingHtml += '<div class="bg-black/40 p-4 rounded-xl mb-2 flex justify-between items-center"><span>' + p.username + ' - ' + p.amount + ' TL (' + p.senderName + ') <span class="text-slate-500 text-xs">' + p.time + '</span></span><div>' +
                         '<button onclick="processPay(\\'' + p.id + '\\',\\'approve\\')" class="bg-emerald-600 px-3 py-1 rounded text-xs font-bold mr-1">Onayla</button>' +
-                        '<button onclick="processPay(\\'' + p.id + '\\',\\'reject\\')" class="bg-red-600 px-3 py-1 rounded text-xs font-bold">Reddet</button></div></div>';
+                        '<button onclick="processPay(\\'' + p.id + '\\',\\'reject\\')" class="bg-red-600 px-3 py-1 rounded text-xs font-bold mr-1">Reddet</button>' +
+                        '<button onclick="processPay(\\'' + p.id + '\\',\\'reject_ban\\')" class="bg-red-800 px-3 py-1 rounded text-xs font-bold" title="Ödeme yapmadan sahte bildirim gönderenler için">Reddet + Banla</button></div></div>';
                 });
                 if (!pendingHtml) pendingHtml = '<p class="text-sm text-slate-500">Bekleyen ödeme yok.</p>';
 
@@ -1313,13 +1317,17 @@ app.get('/', (req, res) => {
                 if (!data.payments.length) allPayHtml = '<p class="text-sm text-slate-500">Henüz ödeme yok.</p>';
 
                 var usersHtml = '<div class="max-h-56 overflow-y-auto space-y-1">' + data.users.map(function (u) {
-                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap justify-between items-center gap-2">' +
-                        '<span class="font-bold text-white">' + u.username + '</span>' +
+                    var banBtn = u.role === 'admin' ? '' : (u.banned ?
+                        '<button onclick="toggleBan(\\'' + u.username + '\\',false)" class="bg-slate-600 px-2 py-1 rounded text-xs font-bold">Banı Kaldır</button>' :
+                        '<button onclick="toggleBan(\\'' + u.username + '\\',true)" class="bg-red-800 px-2 py-1 rounded text-xs font-bold">Banla</button>');
+                    return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap justify-between items-center gap-2' + (u.banned ? ' border border-red-800/60' : '') + '">' +
+                        '<span class="font-bold text-white">' + u.username + (u.banned ? ' <span class="text-red-400">(BANLI)</span>' : '') + '</span>' +
                         '<span>' + u.balance.toFixed(2) + ' TL</span>' +
                         '<span class="text-slate-500">' + u.role + '</span>' +
                         '<span class="text-slate-500">' + u.registeredAt + '</span>' +
                         '<input id="balAdj_' + u.username + '" placeholder="+50 / -20" class="bg-black/40 border border-emerald-500/20 rounded px-2 py-1 text-xs text-white w-20">' +
                         '<button onclick="adjustBalance(\\'' + u.username + '\\')" class="bg-blue-600 px-2 py-1 rounded text-xs font-bold">Uygula</button>' +
+                        banBtn +
                         '</div>';
                 }).join('') + '</div>';
 
@@ -1346,7 +1354,7 @@ app.get('/', (req, res) => {
                 }).join('') + '</div>';
                 if (!data.supportChats.length) supportHtml = '<p class="text-sm text-slate-500">Henüz destek mesajı yok.</p>';
 
-                var svcRes = await fetch('/api/admin/serviceCodes?adminUsername=' + encodeURIComponent(currentUser));
+                var svcRes = await fetch('/api/admin/serviceCodes?adminToken=' + encodeURIComponent(adminToken || ''));
                 var svcData = await svcRes.json();
                 var serviceCodesHtml = '<p class="text-xs text-slate-500 mb-2">Yeni ürünlerin sağlayıcıdaki gerçek servis kodu isimle otomatik bulunur. Yanlış/eksikse buradan elle düzeltebilirsin.</p><div class="max-h-56 overflow-y-auto space-y-1">' + (svcData.list || []).map(function (s) {
                     return '<div class="bg-black/30 px-3 py-2 rounded-lg text-xs flex flex-wrap items-center gap-2"><span class="font-bold text-white flex-1 min-w-[120px]">' + s.name + '</span>' +
@@ -1381,7 +1389,7 @@ app.get('/', (req, res) => {
                 var box = document.getElementById('diagResult');
                 box.innerHTML = '<span class="text-slate-500">Sorgulanıyor, birkaç saniye sürebilir...</span>';
                 try {
-                    var r = await fetch('/api/admin/testApi?adminUsername=' + encodeURIComponent(currentUser) + '&productId=' + encodeURIComponent(sel.value));
+                    var r = await fetch('/api/admin/testApi?adminToken=' + encodeURIComponent(adminToken || '') + '&productId=' + encodeURIComponent(sel.value));
                     var d = await r.json();
                     if (!d.success) { box.innerHTML = '<span class="text-red-400">Hata: ' + (d.error || 'bilinmiyor') + '</span>'; return; }
                     var u = d.urunler[0];
@@ -1402,7 +1410,7 @@ app.get('/', (req, res) => {
                 var inp = document.getElementById('adminReply_' + username);
                 var text = inp.value.trim();
                 if (!text) return;
-                await fetch('/api/admin/support/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, username: username, text: text }) });
+                await fetch('/api/admin/support/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminToken: adminToken, username: username, text: text }) });
                 openAdminPanel();
             }
 
@@ -1410,7 +1418,7 @@ app.get('/', (req, res) => {
                 var inp = document.getElementById('balAdj_' + username);
                 var val = inp.value.trim();
                 if (!val) return;
-                var r = await fetch('/api/admin/adjustBalance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, username: username, amount: val }) });
+                var r = await fetch('/api/admin/adjustBalance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminToken: adminToken, username: username, amount: val }) });
                 var d = await r.json();
                 alert(d.message);
                 if (d.success) openAdminPanel();
@@ -1419,14 +1427,25 @@ app.get('/', (req, res) => {
             async function saveServiceCode(itemId) {
                 var inp = document.getElementById('svcCode_' + itemId);
                 var code = inp.value.trim();
-                var r = await fetch('/api/admin/setServiceCode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, itemId: itemId, code: code }) });
+                var r = await fetch('/api/admin/setServiceCode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminToken: adminToken, itemId: itemId, code: code }) });
                 var d = await r.json();
                 alert(d.message);
                 openAdminPanel();
             }
 
             async function processPay(paymentId, action) {
-                await fetch('/api/admin/processPayment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminUsername: currentUser, paymentId: paymentId, action: action }) });
+                if (action === 'reject_ban' && !confirm('Bu kullanıcıyı reddet VE kalıcı olarak banla? Bu işlem geri alınamaz.')) return;
+                var r = await fetch('/api/admin/processPayment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminToken: adminToken, paymentId: paymentId, action: action }) });
+                var d = await r.json();
+                if (action === 'reject_ban') alert(d.message);
+                openAdminPanel();
+            }
+
+            async function toggleBan(username, banned) {
+                if (banned && !confirm(username + ' kullanıcısını kalıcı olarak banlamak istediğine emin misin?')) return;
+                var r = await fetch('/api/admin/banUser', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ adminToken: adminToken, username: username, banned: banned }) });
+                var d = await r.json();
+                alert(d.message);
                 openAdminPanel();
             }
 
@@ -1436,6 +1455,7 @@ app.get('/', (req, res) => {
                 localStorage.clear();
                 currentUser = null;
                 currentRole = 'user';
+                adminToken = null;
                 init();
             }
             window.onload = init;
