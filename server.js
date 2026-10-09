@@ -8,26 +8,22 @@ const crypto = require('crypto');
 const app = express();
 app.use(bodyParser.json());
 
-// Her yeni dosya teslim edildiğinde bu tarihi değiştiriyoruz. Sitenin en altında küçük yazıyla görünür -
-// Render'a yüklediğin sürümün gerçekten güncellenip güncellenmediğini buradan kontrol edebilirsin.
-const APP_VERSION = '2026-10-09-SECURE-STRICT-V1';
+const APP_VERSION = '2026-10-09-FULL-PACKAGE-V1';
 
-// ====== AYARLAR (Render > Environment bölümünden de girilebilir) ======
+// ====== AYARLAR (Render > Environment veya doğrudan buraya) ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '8811977430';
-const ADMIN_TELEGRAM_USERNAME = process.env.ADMIN_TELEGRAM_USERNAME || 'vipankaa'; // destek için görünen iletişim kanalı
-const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP || '573181006792'; // wa.me linki için ülke koduyla, başında + ve boşluk olmadan
+const ADMIN_TELEGRAM_USERNAME = process.env.ADMIN_TELEGRAM_USERNAME || 'vipankaa';
+const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP || '573181006792';
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://g-venlipanelsms.onrender.com';
 const ONAYLI_SMS_API_KEY = process.env.ONAYLI_SMS_API_KEY || 'osms_7f193a3fe65448a9380061c1b56e9fdc29f49c67e89eb3dd';
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
-// Sağlayıcı bakiyesi bu değerin altına düşünce Telegram'dan otomatik uyarı gelir
 const LOW_BALANCE_THRESHOLD = parseFloat(process.env.LOW_BALANCE_THRESHOLD || '50');
 
-// Admin panel giriş bilgileri - burada veya Render > Environment'tan değiştirilebilir.
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Aklomanti';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AZC.anka.34';
 
-// ====== Sağlayıcıya TEK SIRADAN istek atan kuyruk (TOO_MANY_REQUESTS'i kökten önlemek için) ======
+// ====== SAĞLAYICI KUYRUĞU (TOO_MANY_REQUESTS Önleyici) ======
 const PROVIDER_MIN_INTERVAL_MS = 2200;
 let providerQueue = Promise.resolve();
 let lastProviderCallAt = 0;
@@ -44,16 +40,16 @@ function providerGet(params, timeout) {
 
 const DEFAULT_DB = {
     users: {
-        [ADMIN_USERNAME]: { username: ADMIN_USERNAME, password: ADMIN_PASSWORD, balance: 5000, role: "admin", status: "approved" }
+        [ADMIN_USERNAME]: { username: ADMIN_USERNAME, password: ADMIN_PASSWORD, balance: 5000, role: "admin", status: "approved", banned: false }
     },
     payments: {},
     visitors: [],
     logins: [],
     orders: {},
-    support: {} // username -> [{from:'user'|'admin', text, time, ts}]
+    support: {}
 };
 
-// ====== KALICI KAYIT (dosyaya yazma) ======
+// ====== KALICI VERİTABANI ======
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'anka_data.json');
 let db = DEFAULT_DB;
 try {
@@ -65,9 +61,8 @@ try {
         for (const u in DEFAULT_DB.users) {
             if (!db.users[u]) db.users[u] = DEFAULT_DB.users[u];
         }
-        console.log('[db] Kayıtlı veri diskten yüklendi: ' + Object.keys(db.users).length + ' kullanıcı, ' + Object.keys(db.orders).length + ' sipariş.');
     }
-} catch (e) { console.error('[db] Diskten yükleme hatası, varsayılan veriyle başlanıyor:', e.message); }
+} catch (e) { console.error('[db] Disk yükleme hatası:', e.message); }
 
 db.users[ADMIN_USERNAME] = Object.assign(
     { balance: 5000 },
@@ -116,12 +111,8 @@ app.use((req, res, next) => {
     next();
 });
 
-function isAdmin(name) {
-    return db.users[name] && db.users[name].role === 'admin';
-}
-
-// ====== ADMIN OTURUM TOKENLARI (GÜVENLİK) ======
-let adminSessions = {}; // token -> username
+// ====== ADMIN OTURUM TOKENLARI ======
+let adminSessions = {};
 function createAdminSession(username) {
     const token = crypto.randomBytes(32).toString('hex');
     adminSessions[token] = { username, ts: Date.now() };
@@ -136,7 +127,7 @@ function checkAdminToken(token) {
     return sess.username;
 }
 
-// ====== SABİT ÜRÜN KATALOĞU ======
+// ====== ÜRÜN KATALOĞU ======
 const CATALOG = [
     { id: 'wa_tr', key: 'tr', name: 'WhatsApp Türkiye', serviceCode: 'wa', defCountry: '62', price: 300, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
     { id: 'wa_tr_dinlenmis', key: 'tr', name: 'Dinlendirilmiş WhatsApp Türkiye', serviceCode: 'wa', defCountry: '62', price: 360, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
@@ -145,17 +136,9 @@ const CATALOG = [
     { id: 'tg_us', key: 'us', name: 'Telegram ABD', serviceCode: 'tg', defCountry: '187', alt: ['12'], price: 200, icon: 'fa-telegram', iconSet: 'fa-brands', bg: 'bg-blue-500/10', color: 'text-blue-400' },
     { id: 'ig_tr', key: 'tr', name: 'Instagram Türkiye', defCountry: '62', price: 60, serviceHints: ['instagram'], guessCodes: ['ig'], icon: 'fa-instagram', iconSet: 'fa-brands', bg: 'bg-pink-500/10', color: 'text-pink-400' },
     { id: 'go_tr', key: 'tr', name: 'Google / Gmail Türkiye', defCountry: '62', price: 60, serviceHints: ['google', 'gmail'], guessCodes: ['go'], icon: 'fa-google', iconSet: 'fa-brands', bg: 'bg-red-500/10', color: 'text-red-400' },
-    { id: 'ds_tr', key: 'tr', name: 'Discord Türkiye', defCountry: '62', price: 60, serviceHints: ['discord'], guessCodes: ['ds', 'dc'], icon: 'fa-discord', iconSet: 'fa-brands', bg: 'bg-indigo-500/10', color: 'text-indigo-400' },
-    { id: 'vi_tr', key: 'tr', name: 'Viber Türkiye', defCountry: '62', price: 60, serviceHints: ['viber'], guessCodes: ['vi'], icon: 'fa-viber', iconSet: 'fa-brands', bg: 'bg-purple-500/10', color: 'text-purple-400' },
-    { id: 'ap_tr', key: 'tr', name: 'Apple Türkiye', defCountry: '62', price: 150, serviceHints: ['apple', 'icloud'], guessCodes: ['mz', 'ap'], icon: 'fa-apple', iconSet: 'fa-brands', bg: 'bg-slate-500/10', color: 'text-slate-300' },
-    { id: 'fups_tr', key: 'tr', name: 'FUPS (Fiziki) Türkiye', defCountry: '62', price: 2000, serviceHints: ['fups'], guessCodes: [], icon: 'fa-sim-card', iconSet: 'fa-solid', bg: 'bg-amber-500/10', color: 'text-amber-300' },
-    { id: 'getir_tr', key: 'tr', name: 'Getir Türkiye', defCountry: '62', price: 200, serviceHints: ['getir'], guessCodes: [], icon: 'fa-motorcycle', iconSet: 'fa-solid', bg: 'bg-violet-500/10', color: 'text-violet-300' },
-    { id: 'hopi_tr', key: 'tr', name: 'Hopi Türkiye', defCountry: '62', price: 120, serviceHints: ['hopi'], guessCodes: [], icon: 'fa-gift', iconSet: 'fa-solid', bg: 'bg-orange-500/10', color: 'text-orange-300' },
-    { id: 'ms_tr', key: 'tr', name: 'Microsoft Türkiye', defCountry: '62', price: 50, serviceHints: ['microsoft', 'outlook', 'hotmail'], guessCodes: ['mm', 'ms'], icon: 'fa-microsoft', iconSet: 'fa-brands', bg: 'bg-sky-500/10', color: 'text-sky-400' },
-    { id: 'paycell_tr', key: 'tr', name: 'Paycell (Fiziki) Türkiye', defCountry: '62', price: 1500, serviceHints: ['paycell'], guessCodes: [], icon: 'fa-credit-card', iconSet: 'fa-solid', bg: 'bg-amber-500/10', color: 'text-amber-300' },
-    { id: 'paypal_tr', key: 'tr', name: 'PayPal', defCountry: '62', price: 150, serviceHints: ['paypal'], guessCodes: ['mt', 'pp'], icon: 'fa-paypal', iconSet: 'fa-brands', bg: 'bg-blue-500/10', color: 'text-blue-300' },
-    { id: 'steam_tr', key: 'tr', name: 'Steam Türkiye', defCountry: '62', price: 150, serviceHints: ['steam'], guessCodes: ['st', 'su'], icon: 'fa-steam', iconSet: 'fa-brands', bg: 'bg-slate-500/10', color: 'text-slate-300' }
+    { id: 'ds_tr', key: 'tr', name: 'Discord Türkiye', defCountry: '62', price: 60, serviceHints: ['discord'], guessCodes: ['ds', 'dc'], icon: 'fa-discord', iconSet: 'fa-brands', bg: 'bg-indigo-500/10', color: 'text-indigo-400' }
 ];
+
 const SERVICE_INFO = {
     wa: { name: 'WhatsApp', icon: 'fa-whatsapp', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
     tg: { name: 'Telegram', icon: 'fa-telegram', bg: 'bg-blue-500/10', color: 'text-blue-400' }
@@ -299,7 +282,7 @@ async function countryCandidates(item, serviceCode) {
     return ordered.length ? ordered : nameList;
 }
 
-// ====== SERVİS LİSTESİ ======
+// ====== SERVİS API ======
 app.get('/api/getServices', (req, res) => {
     const list = CATALOG.map(item => {
         const meta = (item.icon ? item : SERVICE_INFO[item.serviceCode]) || {};
@@ -324,22 +307,15 @@ app.post('/api/auth/login', (req, res) => {
     const user = db.users[username];
 
     if (user && user.password === password) {
-        if (user.banned) {
-            return res.json({ success: false, message: "Hesabınız yasaklandı." });
-        }
-        if (user.status === 'pending') {
-            return res.json({ success: false, message: "Üyeliğiniz henüz admin tarafından onaylanmadı." });
-        }
-        if (user.status === 'rejected') {
-            return res.json({ success: false, message: "Üyelik talebiniz reddedildi." });
-        }
+        if (user.banned) return res.json({ success: false, message: "Hesabınız yasaklandı." });
+        if (user.status === 'pending') return res.json({ success: false, message: "Üyeliğiniz henüz admin tarafından onaylanmadı." });
+        if (user.status === 'rejected') return res.json({ success: false, message: "Üyelik talebiniz reddedildi." });
 
         const visitorRec = db.visitors.find(v => v.ip === ip);
         const source = (visitorRec && visitorRec.source) || 'Bilinmiyor';
         db.logins.unshift({ username, ip, source, time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
         if (db.logins.length > 300) db.logins.length = 300;
 
-        // Admin girişi için güvenli token üret
         const adminToken = user.role === 'admin' ? createAdminSession(username) : null;
         res.json({ success: true, username, role: user.role, adminToken });
     } else {
@@ -358,14 +334,13 @@ app.post('/api/auth/register', async (req, res) => {
         password,
         balance: 0,
         role: "user",
-        status: "pending", // Varsayılan durum: Onay Bekliyor
+        status: "pending",
         banned: false,
         createdAt: Date.now(),
         registeredAt: new Date().toLocaleString('tr-TR')
     };
     persist();
 
-    // Admin Telegram Hesabına Onay Bildirimi Gönder
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             chat_id: ADMIN_CHAT_ID,
@@ -378,14 +353,12 @@ app.post('/api/auth/register', async (req, res) => {
                 ]]
             }
         });
-    } catch (e) {
-        console.error('[Telegram] Bildirim gönderme hatası:', e.message);
-    }
+    } catch (e) { console.error('[Telegram] Bildirim hatası:', e.message); }
 
     res.json({ success: true, message: "Kayıt talebiniz alındı. Admin onayladıktan sonra giriş yapabilirsiniz." });
 });
 
-// ====== TELEGRAM BOT ONAY WEBHOOK ******
+// ====== TELEGRAM BOT WEBHOOK ======
 app.post('/telegram/webhook', (req, res) => {
     const update = req.body;
     if (update && update.callback_query) {
@@ -395,12 +368,12 @@ app.post('/telegram/webhook', (req, res) => {
         if (action === 'user_approve' && db.users[payload]) {
             db.users[payload].status = 'approved';
             persist();
-            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: query.id, text: `${payload} kullanıcısı onaylandı.` });
+            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: query.id, text: `${payload} onaylandı.` });
             axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, { chat_id: query.message.chat.id, message_id: query.message.message_id, text: `✅ **ONAYLANDI**\n\nKullanıcı Adı: ${payload}` });
         } else if (action === 'user_reject' && db.users[payload]) {
             db.users[payload].status = 'rejected';
             persist();
-            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: query.id, text: `${payload} kullanıcısı reddedildi.` });
+            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: query.id, text: `${payload} reddedildi.` });
             axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, { chat_id: query.message.chat.id, message_id: query.message.message_id, text: `❌ **REDDEDİLDİ**\n\nKullanıcı Adı: ${payload}` });
         }
     }
@@ -410,7 +383,6 @@ app.post('/telegram/webhook', (req, res) => {
 app.post('/api/deposit/notify', async (req, res) => {
     const { username, senderName, amount } = req.body;
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
-    if (db.users[username] && db.users[username].banned) return res.json({ success: false, message: "Hesabınız yasaklandı." });
 
     const paymentId = 'pay_' + Date.now();
     db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR'), ts: Date.now() };
@@ -427,20 +399,20 @@ app.post('/api/deposit/notify', async (req, res) => {
     res.json({ success: true, message: "Ödeme bildiriminiz alındı. İnceleniyor." });
 });
 
-// ====== ADMIN ENDPOINTLERİ (KORUMALI) ======
+// ====== KORUMALI ADMIN ENDPOINTLERİ ======
 app.get('/api/admin/getData', (req, res) => {
     const { adminToken } = req.query;
     if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
 
     const users = Object.values(db.users).map(u => ({ username: u.username, balance: u.balance, role: u.role, status: u.status || 'approved', registeredAt: u.registeredAt || '-' }));
-    const payments = Object.values(db.payments).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const logins = db.logins.slice(0, 100);
-    const orders = Object.values(db.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 100);
-    const supportChats = Object.keys(db.support).map(u => ({ username: u, last: db.support[u][db.support[u].length - 1], count: db.support[u].length })).sort((a, b) => (b.last ? b.last.ts : 0) - (a.last ? a.last.ts : 0));
-    const catalogList = CATALOG.map(c => ({ id: c.id, name: c.name }));
-    const visitorList = db.visitors.slice(0, 100);
-
-    res.json({ success: true, users, payments, logins, orders, supportChats, visitors: db.visitors.length, visitorList, catalog: catalogList });
+    res.json({
+        success: true,
+        users,
+        payments: Object.values(db.payments).sort((a, b) => (b.ts || 0) - (a.ts || 0)),
+        logins: db.logins.slice(0, 100),
+        orders: Object.values(db.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 100),
+        visitors: db.visitors.length
+    });
 });
 
 app.post('/api/admin/processPayment', (req, res) => {
@@ -474,90 +446,88 @@ app.post('/api/admin/adjustBalance', (req, res) => {
     res.json({ success: true, message: username + " kullanıcısının bakiyesi güncellendi.", newBalance: db.users[username].balance });
 });
 
-app.get('/api/admin/testApi', async (req, res) => {
-    const { adminToken } = req.query;
-    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
-    try {
-        const balResp = await providerGet({ action: 'getBalance' }, 20000);
-        countryCache.time = 0;
-        servicesListCache.time = 0;
-        const { map, all } = await resolveCountries();
-        const onlyId = req.query.productId;
-        const items = onlyId ? CATALOG.filter(c => c.id === onlyId) : CATALOG;
-        const urunler = [];
-        for (const item of items) {
-            const serviceCode = await resolveServiceCode(item);
-            const candidates = await countryCandidates(item, serviceCode);
-            const prices = await fetchServicePrices(serviceCode);
-            urunler.push({
-                urun: item.name, servisKodu: serviceCode,
-                kodOnaylandi: !!(serviceCodeCache[item.id] && serviceCodeCache[item.id].confirmed) || !!item.serviceCode,
-                denenecekUlkeler: candidates,
-                ilkUlkeFiyatBilgisi: prices[candidates[0]] || 'fiyat bilgisi yok'
-            });
-        }
-        res.json({ success: true, providerBalance: balResp.data, bulunanUlkeIdleri: map, tumAdaylar: all, urunler });
-    } catch (e) {
-        res.json({ success: false, error: e.message });
-    }
-});
+// ====== ANA SAYFA ARAYÜZÜ (Cannot GET / Çözümü) ======
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="tr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>SMS Onay Paneli</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-slate-900 text-white min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-800 p-8 rounded-xl shadow-2xl max-w-md w-full border border-slate-700">
+            <h1 class="text-2xl font-bold text-center text-blue-400 mb-6">SMS Onay Paneli</h1>
+            
+            <div id="msg" class="hidden p-3 mb-4 rounded text-sm text-center"></div>
 
-app.post('/api/admin/setServiceCode', (req, res) => {
-    const { adminToken, itemId, code } = req.body;
-    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
-    const item = CATALOG.find(c => c.id === itemId);
-    if (!item) return res.json({ success: false, message: "Ürün bulunamadı." });
-    if (!code || !code.trim()) { delete serviceOverrides[itemId]; return res.json({ success: true, message: "Elle ayar kaldırıldı." }); }
-    serviceOverrides[itemId] = code.trim();
-    delete serviceCodeCache[itemId];
-    res.json({ success: true, message: "Servis kodu kaydedildi: " + code.trim() });
-});
+            <!-- Giriş Formu -->
+            <div id="loginForm">
+                <h2 class="text-lg font-semibold mb-4 text-slate-300">Giriş Yap</h2>
+                <input id="l_user" type="text" placeholder="Kullanıcı Adı" class="w-full mb-3 p-3 rounded bg-slate-700 border border-slate-600 focus:outline-none focus:border-blue-500">
+                <input id="l_pass" type="password" placeholder="Şifre" class="w-full mb-4 p-3 rounded bg-slate-700 border border-slate-600 focus:outline-none focus:border-blue-500">
+                <button onclick="login()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded transition">Giriş Yap</button>
+                <p class="mt-4 text-sm text-center text-slate-400">Hesabın yok mu? <a href="#" onclick="toggleForm()" class="text-blue-400 underline">Kayıt Ol</a></p>
+            </div>
 
-app.get('/api/admin/serviceCodes', async (req, res) => {
-    const { adminToken } = req.query;
-    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
-    const list = [];
-    for (const item of CATALOG) {
-        if (item.serviceCode) continue;
-        const code = await resolveServiceCode(item);
-        list.push({ id: item.id, name: item.name, code, confirmed: !!(serviceCodeCache[item.id] && serviceCodeCache[item.id].confirmed), override: serviceOverrides[item.id] || '' });
-    }
-    res.json({ success: true, list });
-});
+            <!-- Kayıt Formu -->
+            <div id="registerForm" class="hidden">
+                <h2 class="text-lg font-semibold mb-4 text-slate-300">Kayıt Ol (Yönetici Onaylı)</h2>
+                <input id="r_user" type="text" placeholder="Kullanıcı Adı" class="w-full mb-3 p-3 rounded bg-slate-700 border border-slate-600 focus:outline-none focus:border-emerald-500">
+                <input id="r_pass" type="password" placeholder="Şifre" class="w-full mb-4 p-3 rounded bg-slate-700 border border-slate-600 focus:outline-none focus:border-emerald-500">
+                <button onclick="register()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded transition">Kayıt Talebi Gönder</button>
+                <p class="mt-4 text-sm text-center text-slate-400">Zaten üye misin? <a href="#" onclick="toggleForm()" class="text-blue-400 underline">Giriş Yap</a></p>
+            </div>
+        </div>
 
-// ====== CANLI DESTEK ======
-app.post('/api/support/send', async (req, res) => {
-    const { username, text } = req.body;
-    if (!db.users[username] || !text || !text.trim()) return res.json({ success: false });
-    if (!db.support[username]) db.support[username] = [];
-    const msg = { from: 'user', text: text.trim().slice(0, 1000), time: new Date().toLocaleString('tr-TR'), ts: Date.now() };
-    db.support[username].push(msg);
-    if (db.support[username].length > 200) db.support[username].shift();
+        <script>
+            function toggleForm() {
+                document.getElementById('loginForm').classList.toggle('hidden');
+                document.getElementById('registerForm').classList.toggle('hidden');
+            }
 
-    try {
-        const sent = await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: ADMIN_CHAT_ID, text: `💬 Destek | ${username}:\n${msg.text}` });
-        const tgId = sent.data && sent.data.result && sent.data.result.message_id;
-        if (tgId) supportMsgMap[tgId] = username;
-    } catch (e) {}
+            function showMsg(txt, success) {
+                const el = document.getElementById('msg');
+                el.innerText = txt;
+                el.className = 'p-3 mb-4 rounded text-sm text-center ' + (success ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30');
+                el.classList.remove('hidden');
+            }
 
-    res.json({ success: true });
-});
+            async function login() {
+                const username = document.getElementById('l_user').value;
+                const password = document.getElementById('l_pass').value;
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    showMsg("Giriş başarılı! Rol: " + data.role, true);
+                    if(data.role === 'admin') alert("Admin Girişi Yapıldı! Token: " + data.adminToken);
+                } else {
+                    showMsg(data.message, false);
+                }
+            }
 
-app.get('/api/support/messages', (req, res) => {
-    const { username, sinceTs } = req.query;
-    if (!db.users[username]) return res.json({ success: false, messages: [] });
-    let list = db.support[username] || [];
-    if (sinceTs) list = list.filter(m => m.ts > parseInt(sinceTs));
-    res.json({ success: true, messages: list, contact: ADMIN_TELEGRAM_USERNAME, whatsapp: ADMIN_WHATSAPP });
-});
+            async function register() {
+                const username = document.getElementById('r_user').value;
+                const password = document.getElementById('r_pass').value;
 
-app.post('/api/admin/support/reply', async (req, res) => {
-    const { adminToken, username, text } = req.body;
-    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
-    if (!db.users[username] || !text || !text.trim()) return res.json({ success: false });
-    if (!db.support[username]) db.support[username] = [];
-    db.support[username].push({ from: 'admin', text: text.trim().slice(0, 1000), time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
-    res.json({ success: true });
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                showMsg(data.message, data.success);
+            }
+        </script>
+    </body>
+    </html>
+    `);
 });
 
 const PORT = process.env.PORT || 3000;
