@@ -3,6 +3,7 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 app.use(bodyParser.json());
@@ -21,6 +22,12 @@ const ONAYLI_SMS_API_KEY = process.env.ONAYLI_SMS_API_KEY || 'osms_7f193a3fe6544
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
 // Sağlayıcı bakiyesi bu değerin altına düşünce Telegram'dan otomatik uyarı gelir
 const LOW_BALANCE_THRESHOLD = parseFloat(process.env.LOW_BALANCE_THRESHOLD || '50');
+
+// Admin panel giriş bilgileri - burada veya Render > Environment'tan değiştirilebilir.
+// Sunucu her açıldığında bu hesabın kullanıcı adı/şifresi/yetkisi ZORLA bu değerlere eşitlenir (aşağıda, db yüklendikten sonra),
+// yani diskte eski/bozuk bir admin kaydı olsa bile admin girişi her zaman bununla çalışır.
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Aklomanti';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AZC.anka.34';
 
 // ====== Sağlayıcıya TEK SIRADAN istek atan kuyruk (TOO_MANY_REQUESTS'i kökten önlemek için) ======
 // Aynı anda birden fazla fonksiyon (fiyat kontrolü, ülke listesi, bakiye, getNumber...) sağlayıcıya
@@ -43,7 +50,7 @@ function providerGet(params, timeout) {
 
 const DEFAULT_DB = {
     users: {
-        "Aklomanti": { username: "Aklomanti", password: "Aklomanti", balance: 5000, role: "admin" }
+        [ADMIN_USERNAME]: { username: ADMIN_USERNAME, password: ADMIN_PASSWORD, balance: 5000, role: "admin", banned: false }
     },
     payments: {},
     visitors: [],
@@ -77,6 +84,15 @@ try {
         console.log('[db] Kayıtlı veri diskten yüklendi: ' + Object.keys(db.users).length + ' kullanıcı, ' + Object.keys(db.orders).length + ' sipariş.');
     }
 } catch (e) { console.error('[db] Diskten yükleme hatası, varsayılan veriyle başlanıyor:', e.message); }
+
+// Admin hesabının kullanıcı adı/şifresi/rolü her başlangıçta koddaki (veya Environment'taki) değerlere ZORLA eşitlenir.
+// Böylece diskte eski bir şifre kalmış olsa bile admin girişi her zaman güncel bilgilerle çalışır.
+// (Bakiyesi varsa korunur, sadece kimlik bilgileri senkronize edilir.)
+db.users[ADMIN_USERNAME] = Object.assign(
+    { balance: 5000 },
+    db.users[ADMIN_USERNAME] || {},
+    { username: ADMIN_USERNAME, password: ADMIN_PASSWORD, role: 'admin', banned: false }
+);
 
 let saveTimer = null;
 function persist() {
@@ -124,6 +140,27 @@ app.use((req, res, next) => {
 
 function isAdmin(name) {
     return db.users[name] && db.users[name].role === 'admin';
+}
+
+// ====== ADMIN OTURUM TOKENLARI (GÜVENLİK) ======
+// ÖNEMLİ GÜVENLİK DÜZELTMESİ: Daha önce admin uç noktaları sadece "adminUsername" diye bir METİN alanına
+// bakıyordu - yani şifre/oturum KONTROLÜ YOKTU. Herhangi biri tarayıcı konsolundan adminUsername="Aklomanti"
+// göndererek (bu isim panelde zaten görünüyor) bakiye yükleyebilir, ödeme onaylayabilir vs. yapabiliyordu.
+// Şimdi admin girişinde rastgele, tahmin edilemez bir TOKEN üretiliyor; tüm admin işlemleri artık
+// şifre doğrulanmadan hiçbir şekilde çalışmayan bu token'ı istiyor.
+let adminSessions = {}; // token -> username
+function createAdminSession(username) {
+    const token = crypto.randomBytes(32).toString('hex');
+    adminSessions[token] = { username, ts: Date.now() };
+    return token;
+}
+// Token'dan gerçek admin kullanıcı adını döndürür; geçersiz/süresi dolmuşsa (24 saat) null döner.
+function checkAdminToken(token) {
+    const sess = token && adminSessions[token];
+    if (!sess) return null;
+    if (Date.now() - sess.ts > 24 * 60 * 60 * 1000) { delete adminSessions[token]; return null; }
+    if (!db.users[sess.username] || db.users[sess.username].role !== 'admin') return null;
+    return sess.username;
 }
 
 // ====== SABİT ÜRÜN KATALOĞU ======
