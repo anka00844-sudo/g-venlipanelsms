@@ -365,11 +365,17 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (db.users[username] && db.users[username].password === password) {
+        if (db.users[username].banned) {
+            return res.json({ success: false, message: "Hesabınız yasaklandı. Destek ile iletişime geçin." });
+        }
         const visitorRec = db.visitors.find(v => v.ip === ip);
         const source = (visitorRec && visitorRec.source) || 'Bilinmiyor';
         db.logins.unshift({ username, ip, source, time: new Date().toLocaleString('tr-TR'), ts: Date.now() });
         if (db.logins.length > 300) db.logins.length = 300;
-        res.json({ success: true, username, role: db.users[username].role });
+        const role = db.users[username].role;
+        // Admin girişinde, admin uç noktalarının gerektirdiği tahmin edilemez oturum token'ı üretilir.
+        const adminToken = role === 'admin' ? createAdminSession(username) : null;
+        res.json({ success: true, username, role, adminToken });
     } else {
         res.json({ success: false, message: "Hatalı kullanıcı adı veya şifre!" });
     }
@@ -380,7 +386,7 @@ app.post('/api/auth/register', (req, res) => {
     if (!username || !password) return res.json({ success: false, message: "Alanlar boş bırakılamaz." });
     if (db.users[username]) return res.json({ success: false, message: "Bu kullanıcı adı zaten alınmış." });
 
-    db.users[username] = { username, password, balance: 0, role: "user", createdAt: Date.now(), registeredAt: new Date().toLocaleString('tr-TR') };
+    db.users[username] = { username, password, balance: 0, role: "user", banned: false, createdAt: Date.now(), registeredAt: new Date().toLocaleString('tr-TR') };
     persist();
     res.json({ success: true, username, role: "user" });
 });
@@ -388,6 +394,7 @@ app.post('/api/auth/register', (req, res) => {
 app.post('/api/deposit/notify', async (req, res) => {
     const { username, senderName, amount } = req.body;
     if (!username || !senderName || !amount) return res.json({ success: false, message: "Tüm alanları doldurun." });
+    if (db.users[username] && db.users[username].banned) return res.json({ success: false, message: "Hesabınız yasaklandı." });
 
     const paymentId = 'pay_' + Date.now();
     db.payments[paymentId] = { id: paymentId, username, senderName, amount: parseFloat(amount), status: 'pending', time: new Date().toLocaleString('tr-TR'), ts: Date.now() };
@@ -406,8 +413,8 @@ app.post('/api/deposit/notify', async (req, res) => {
 
 // ====== ADMIN: her şeyi tek seferde getir ======
 app.get('/api/admin/getData', (req, res) => {
-    const { adminUsername } = req.query;
-    if (!isAdmin(adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
+    const { adminToken } = req.query;
+    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
 
     const users = Object.values(db.users).map(u => ({ username: u.username, balance: u.balance, role: u.role, registeredAt: u.registeredAt || '-' }));
     const payments = Object.values(db.payments).sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -421,8 +428,8 @@ app.get('/api/admin/getData', (req, res) => {
 });
 
 app.post('/api/admin/processPayment', (req, res) => {
-    const { adminUsername, paymentId, action } = req.body;
-    if (!isAdmin(adminUsername)) return res.json({ success: false, message: "Yetkisiz." });
+    const { adminToken, paymentId, action } = req.body;
+    if (!checkAdminToken(adminToken)) return res.json({ success: false, message: "Yetkisiz." });
 
     const payment = db.payments[paymentId];
     if (!payment || payment.status !== 'pending') return res.json({ success: false, message: "Ödeme bulunamadı." });
@@ -432,6 +439,12 @@ app.post('/api/admin/processPayment', (req, res) => {
         if (db.users[payment.username]) db.users[payment.username].balance += payment.amount;
         persist();
         res.json({ success: true, message: "Ödeme onaylandı." });
+    } else if (action === 'reject_ban') {
+        // Ödeme yapmadan sahte bildirim gönderen kullanıcılar için: reddet + hesabı kalıcı olarak banla.
+        payment.status = 'rejected';
+        if (db.users[payment.username]) db.users[payment.username].banned = true;
+        persist();
+        res.json({ success: true, message: "Ödeme reddedildi ve " + payment.username + " kalıcı olarak banlandı." });
     } else {
         payment.status = 'rejected';
         persist();
@@ -441,8 +454,8 @@ app.post('/api/admin/processPayment', (req, res) => {
 
 // Admin'in bir kullanıcının panel içi TL bakiyesini elle değiştirmesi (yükleme yapmadan, örn. hediye/iade/düzeltme için)
 app.post('/api/admin/adjustBalance', (req, res) => {
-    const { adminUsername, username, amount } = req.body;
-    if (!isAdmin(adminUsername)) return res.status(403).json({ success: false, message: "Yetkisiz." });
+    const { adminToken, username, amount } = req.body;
+    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
     if (!username || !db.users[username]) return res.json({ success: false, message: "Kullanıcı bulunamadı." });
     const amt = Number(amount);
     if (isNaN(amt) || amt === 0) return res.json({ success: false, message: "Geçerli bir tutar gir (eklemek için pozitif, düşmek için negatif, örn: 50 veya -20)." });
@@ -450,6 +463,17 @@ app.post('/api/admin/adjustBalance', (req, res) => {
     if (db.users[username].balance < 0) db.users[username].balance = 0;
     persist();
     res.json({ success: true, message: username + " kullanıcısının bakiyesi güncellendi. Yeni bakiye: " + db.users[username].balance.toFixed(2) + " TL", newBalance: db.users[username].balance });
+});
+
+// Kullanıcıyı kalıcı olarak banla / banı kaldır (ödeme yapmadan bildirim gönderenler, kötüye kullanım vs. için)
+app.post('/api/admin/banUser', (req, res) => {
+    const { adminToken, username, banned } = req.body;
+    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz." });
+    if (!username || !db.users[username]) return res.json({ success: false, message: "Kullanıcı bulunamadı." });
+    if (db.users[username].role === 'admin') return res.json({ success: false, message: "Admin hesabı banlanamaz." });
+    db.users[username].banned = !!banned;
+    persist();
+    res.json({ success: true, message: username + (banned ? " kalıcı olarak banlandı." : " banı kaldırıldı."), banned: db.users[username].banned });
 });
 
 // Sağlayıcı bağlantı testi: bakiye + her ürün için denenecek ülke ID'leri
@@ -575,6 +599,7 @@ app.post('/api/buyNumber', async (req, res) => {
     const { productId, username } = req.body;
     const userObj = db.users[username];
     if (!userObj) return res.json({ success: false, message: "Kullanıcı bulunamadı." });
+    if (userObj.banned) return res.json({ success: false, message: "Hesabınız yasaklandı, satın alma yapamazsınız." });
 
     const item = CATALOG.find(c => c.id === productId);
     if (!item) return res.json({ success: false, message: "Geçersiz ürün." });
