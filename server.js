@@ -8,17 +8,13 @@ const crypto = require('crypto');
 const app = express();
 app.use(bodyParser.json());
 
-const APP_VERSION = '2026-10-09-SECURE-V1';
+const APP_VERSION = '2026-10-09-FULL-PANEL-V1';
 
 // ====== AYARLAR ======
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8950975662:AAGVS-pPNJYWpxYjSLyJIXTEDBn0mD5y8XY';
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '8811977430';
-const ADMIN_TELEGRAM_USERNAME = process.env.ADMIN_TELEGRAM_USERNAME || 'vipankaa';
-const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP || '573181006792';
-const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://g-venlipanelsms.onrender.com';
 const ONAYLI_SMS_API_KEY = process.env.ONAYLI_SMS_API_KEY || 'osms_7f193a3fe65448a9380061c1b56e9fdc29f49c67e89eb3dd';
 const ONAYLI_SMS_URL = 'https://onaylasms.com.tr/stubs/handler_api.php';
-const LOW_BALANCE_THRESHOLD = parseFloat(process.env.LOW_BALANCE_THRESHOLD || '50');
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Aklomanti';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AZC.anka.34';
@@ -49,13 +45,13 @@ function providerGet(params, timeout) {
     return run;
 }
 
-const adminPassData = hashPassword(ADMIN_PASSWORD);
+const freshAdminPass = hashPassword(ADMIN_PASSWORD);
 const DEFAULT_DB = {
     users: {
         [ADMIN_USERNAME]: {
             username: ADMIN_USERNAME,
-            salt: adminPassData.salt,
-            passwordHash: adminPassData.hash,
+            salt: freshAdminPass.salt,
+            passwordHash: freshAdminPass.hash,
             balance: 5000,
             role: "admin",
             status: "approved",
@@ -80,8 +76,6 @@ try {
     }
 } catch (e) { console.error('[db] Yükleme hatası:', e.message); }
 
-// Admin hesabını zorla güncel tut ve şifreyi hash'le
-const freshAdminPass = hashPassword(ADMIN_PASSWORD);
 db.users[ADMIN_USERNAME] = Object.assign(
     { balance: 5000 },
     db.users[ADMIN_USERNAME] || {},
@@ -114,21 +108,12 @@ function createAdminSession(username) {
 function checkAdminToken(token) {
     const sess = token && adminSessions[token];
     if (!sess) return null;
-    if (Date.now() - sess.ts > 2 * 60 * 60 * 1000) { // 2 saat geçerlilik
-        delete adminSessions[token]; 
-        return null; 
-    }
+    if (Date.now() - sess.ts > 2 * 60 * 60 * 1000) { delete adminSessions[token]; return null; }
     if (!db.users[sess.username] || db.users[sess.username].role !== 'admin') return null;
     return sess.username;
 }
 
-// ====== KATALOG VE MÜŞTERİ İŞLEMLERİ ======
-const CATALOG = [
-    { id: 'wa_tr', key: 'tr', name: 'WhatsApp Türkiye', serviceCode: 'wa', defCountry: '62', price: 300, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
-    { id: 'wa_tr_dinlenmis', key: 'tr', name: 'Dinlendirilmiş WhatsApp Türkiye', serviceCode: 'wa', defCountry: '62', price: 360, icon: 'fa-whatsapp', iconSet: 'fa-brands', bg: 'bg-emerald-500/10', color: 'text-emerald-400' },
-    { id: 'tg_tr', key: 'tr', name: 'Telegram Türkiye', serviceCode: 'tg', defCountry: '62', price: 200, icon: 'fa-telegram', iconSet: 'fa-brands', bg: 'bg-blue-500/10', color: 'text-blue-400' }
-];
-
+// ====== ZİYARETÇİ TAKİBİ ======
 app.use((req, res, next) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (!db.visitors.some(v => v.ip === ip)) {
@@ -143,13 +128,11 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     const user = db.users[username];
 
-    if (!user) {
-        return res.json({ success: false, message: "Hatalı kullanıcı adı veya şifre!" });
-    }
+    if (!user) return res.json({ success: false, message: "Hatalı kullanıcı adı veya şifre!" });
 
     const isValid = user.salt 
         ? verifyPassword(password, user.salt, user.passwordHash)
-        : user.password === password; // Eski kayıtlara uyumluluk
+        : user.password === password;
 
     if (isValid) {
         if (user.banned) return res.json({ success: false, message: "Hesabınız yasaklandı." });
@@ -171,11 +154,8 @@ app.post('/api/auth/register', async (req, res) => {
         return res.json({ success: false, message: "Tüm alanlar (Kullanıcı Adı, Şifre, Telefon, Telegram) zorunludur." });
     }
 
-    if (db.users[username]) {
-        return res.json({ success: false, message: "Bu kullanıcı adı zaten alınmış." });
-    }
+    if (db.users[username]) return res.json({ success: false, message: "Bu kullanıcı adı zaten alınmış." });
 
-    // Telegram Kullanıcı Adı Doğrulama
     let cleanTg = telegramUsername.trim();
     if (!cleanTg.startsWith('@')) cleanTg = '@' + cleanTg;
     if (cleanTg.length < 5 || cleanTg.includes(' ')) {
@@ -191,13 +171,12 @@ app.post('/api/auth/register', async (req, res) => {
         passwordHash: passData.hash,
         balance: 0,
         role: "user",
-        status: "pending", // Onay Bekliyor
+        status: "pending",
         banned: false,
         registeredAt: new Date().toLocaleString('tr-TR')
     };
     persist();
 
-    // Telegram Admin Grubuna/Botuna Onay İstegi Gönder
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             chat_id: ADMIN_CHAT_ID,
@@ -217,48 +196,29 @@ app.post('/api/auth/register', async (req, res) => {
     res.json({ success: true, message: "Kayıt talebiniz alındı! Admin onayından sonra giriş yapabilirsiniz." });
 });
 
-// ====== TELEGRAM CALLBACK WEBHOOK (BOT BUTONLARI İÇİN) ======
+// ====== TELEGRAM BOT WEBHOOK ======
 app.post(`/telegram/webhook`, (req, res) => {
     const update = req.body;
     if (update && update.callback_query) {
         const query = update.callback_query;
-        const data = query.data || '';
-        const [action, payload] = data.split('|');
+        const [action, payload] = (query.data || '').split('|');
 
-        if (action === 'user_approve') {
-            if (db.users[payload]) {
-                db.users[payload].status = 'approved';
-                persist();
-                axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
-                    callback_query_id: query.id,
-                    text: `${payload} kullanıcısının kaydı onaylandı.`
-                });
-                axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, {
-                    chat_id: query.message.chat.id,
-                    message_id: query.message.message_id,
-                    text: `✅ **ONAYLANDI**\n\nKullanıcı: ${payload}\nİşlem Yapan: Admin`
-                });
-            }
-        } else if (action === 'user_reject') {
-            if (db.users[payload]) {
-                db.users[payload].status = 'rejected';
-                persist();
-                axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
-                    callback_query_id: query.id,
-                    text: `${payload} kullanıcısının kaydı reddedildi.`
-                });
-                axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, {
-                    chat_id: query.message.chat.id,
-                    message_id: query.message.message_id,
-                    text: `❌ **REDDEDİLDİ**\n\nKullanıcı: ${payload}\nİşlem Yapan: Admin`
-                });
-            }
+        if (action === 'user_approve' && db.users[payload]) {
+            db.users[payload].status = 'approved';
+            persist();
+            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: query.id, text: `${payload} onaylandı.` });
+            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, { chat_id: query.message.chat.id, message_id: query.message.message_id, text: `✅ **ONAYLANDI**\n\nKullanıcı: ${payload}` });
+        } else if (action === 'user_reject' && db.users[payload]) {
+            db.users[payload].status = 'rejected';
+            persist();
+            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: query.id, text: `${payload} reddedildi.` });
+            axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, { chat_id: query.message.chat.id, message_id: query.message.message_id, text: `❌ **REDDEDİLDİ**\n\nKullanıcı: ${payload}` });
         }
     }
     res.sendStatus(200);
 });
 
-// ====== KORUMALI ADMIN ENDPOINTLERİ ======
+// ====== ADMIN ENDPOINTLERİ ======
 app.get('/api/admin/getData', (req, res) => {
     const { adminToken } = req.query;
     if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
@@ -283,19 +243,95 @@ app.get('/api/admin/getData', (req, res) => {
     });
 });
 
-app.get('/api/admin/testApi', async (req, res) => {
-    const { adminToken } = req.query;
-    if (!checkAdminToken(adminToken)) return res.status(403).json({ success: false, message: "Yetkisiz erişim." });
+// ====== ANA SAYFA ARAYÜZÜ (Cannot GET / Hatasını Çözen Bölüm) ======
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="tr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>SMS Onay Paneli</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-slate-900 text-white min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-800 p-8 rounded-xl shadow-2xl max-w-md w-full border border-slate-700">
+            <h1 class="text-2xl font-bold text-center text-blue-400 mb-6">SMS Onay Paneli</h1>
+            
+            <div id="msg" class="hidden p-3 mb-4 rounded text-sm text-center"></div>
 
-    try {
-        const balResp = await providerGet({ action: 'getBalance' }, 20000);
-        res.json({ success: true, balance: balResp.data });
-    } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
-    }
+            <!-- Giriş Formu -->
+            <div id="loginForm">
+                <h2 class="text-lg font-semibold mb-4 text-slate-300">Giriş Yap</h2>
+                <input id="l_user" type="text" placeholder="Kullanıcı Adı" class="w-full mb-3 p-3 rounded bg-slate-700 border border-slate-600">
+                <input id="l_pass" type="password" placeholder="Şifre" class="w-full mb-4 p-3 rounded bg-slate-700 border border-slate-600">
+                <button onclick="login()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded">Giriş Yap</button>
+                <p class="mt-4 text-sm text-center text-slate-400">Hesabın yok mu? <a href="#" onclick="toggleForm()" class="text-blue-400 underline">Kayıt Ol</a></p>
+            </div>
+
+            <!-- Kayıt Formu -->
+            <div id="registerForm" class="hidden">
+                <h2 class="text-lg font-semibold mb-4 text-slate-300">Kayıt Ol (Admin Onaylı)</h2>
+                <input id="r_user" type="text" placeholder="Kullanıcı Adı" class="w-full mb-3 p-3 rounded bg-slate-700 border border-slate-600">
+                <input id="r_pass" type="password" placeholder="Şifre" class="w-full mb-3 p-3 rounded bg-slate-700 border border-slate-600">
+                <input id="r_phone" type="text" placeholder="Telefon Numarası" class="w-full mb-3 p-3 rounded bg-slate-700 border border-slate-600">
+                <input id="r_tg" type="text" placeholder="Telegram Kullanıcı Adı (@kullanici)" class="w-full mb-4 p-3 rounded bg-slate-700 border border-slate-600">
+                <button onclick="register()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded">Kayıt Başvurusu Yap</button>
+                <p class="mt-4 text-sm text-center text-slate-400">Zaten üye misin? <a href="#" onclick="toggleForm()" class="text-blue-400 underline">Giriş Yap</a></p>
+            </div>
+        </div>
+
+        <script>
+            function toggleForm() {
+                document.getElementById('loginForm').classList.toggle('hidden');
+                document.getElementById('registerForm').classList.toggle('hidden');
+            }
+
+            function showMsg(txt, success) {
+                const el = document.getElementById('msg');
+                el.innerText = txt;
+                el.className = 'p-3 mb-4 rounded text-sm text-center ' + (success ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400');
+                el.classList.remove('hidden');
+            }
+
+            async function login() {
+                const username = document.getElementById('l_user').value;
+                const password = document.getElementById('l_pass').value;
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    showMsg("Giriş başarılı! Rol: " + data.role, true);
+                    if(data.role === 'admin') alert("Admin Token Alındı: " + data.adminToken);
+                } else {
+                    showMsg(data.message, false);
+                }
+            }
+
+            async function register() {
+                const username = document.getElementById('r_user').value;
+                const password = document.getElementById('r_pass').value;
+                const phone = document.getElementById('r_phone').value;
+                const telegramUsername = document.getElementById('r_tg').value;
+
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password, phone, telegramUsername })
+                });
+                const data = await res.json();
+                showMsg(data.message, data.success);
+            }
+        </script>
+    </body>
+    </html>
+    `);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Güvenli Sunucu Çalışıyor: Port ${PORT} [SURUM: ${APP_VERSION}]`);
+    console.log(`Sunucu Başlatıldı: Port ${PORT} [SURUM: ${APP_VERSION}]`);
 });
